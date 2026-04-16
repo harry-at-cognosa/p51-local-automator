@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Container, Row, Col, Card, Button, Badge, Table, Alert, Spinner,
-  Modal,
+  Modal, Form,
 } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
@@ -41,6 +41,8 @@ export default function WorkflowDetail() {
   const [runMessage, setRunMessage] = useState("");
   const [showConfig, setShowConfig] = useState(false);
   const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState("");
 
   const fetchData = () => {
     axiosClient.get(`/workflows/${id}`).then((res) => setWorkflow(res.data));
@@ -105,7 +107,34 @@ export default function WorkflowDetail() {
     <Container fluid className="p-4">
       <div className="d-flex justify-content-between align-items-start mb-4">
         <div>
-          <h3>{workflow.name}</h3>
+          {editingName ? (
+            <div className="d-flex gap-2 align-items-center mb-1">
+              <Form.Control
+                value={nameValue}
+                onChange={(e) => setNameValue(e.target.value)}
+                autoFocus
+                style={{ fontSize: "1.4rem", fontWeight: "bold", width: 400 }}
+                onKeyDown={async (e) => {
+                  if (e.key === "Enter") {
+                    await axiosClient.put(`/workflows/${id}`, { name: nameValue });
+                    setEditingName(false);
+                    fetchData();
+                  }
+                  if (e.key === "Escape") setEditingName(false);
+                }}
+              />
+              <Button size="sm" variant="success" onClick={async () => {
+                await axiosClient.put(`/workflows/${id}`, { name: nameValue });
+                setEditingName(false);
+                fetchData();
+              }}>Save</Button>
+              <Button size="sm" variant="secondary" onClick={() => setEditingName(false)}>Cancel</Button>
+            </div>
+          ) : (
+            <h3 style={{ cursor: "pointer" }} onClick={() => { setNameValue(workflow.name); setEditingName(true); }}>
+              {workflow.name} <span className="text-muted" style={{ fontSize: "0.5em" }}>click to edit</span>
+            </h3>
+          )}
           <p className="text-muted mb-0">
             Created {new Date(workflow.created_at).toLocaleDateString()}
             {workflow.last_run_at && <> &middot; Last run {new Date(workflow.last_run_at).toLocaleString()}</>}
