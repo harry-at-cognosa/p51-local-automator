@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Container, Table, Badge } from "react-bootstrap";
+import { useEffect, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
+import { Container, Table, Badge, Button, Modal, Form, Row, Col } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 
 interface WorkflowType {
@@ -7,6 +8,7 @@ interface WorkflowType {
   type_name: string;
   type_desc: string;
   type_category: string;
+  default_config: Record<string, unknown>;
   enabled: boolean;
 }
 
@@ -23,11 +25,17 @@ interface UserWorkflow {
 export default function Workflows() {
   const [types, setTypes] = useState<WorkflowType[]>([]);
   const [workflows, setWorkflows] = useState<UserWorkflow[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedTypeId, setSelectedTypeId] = useState<number>(0);
+  const [newName, setNewName] = useState("");
+  const navigate = useNavigate();
 
-  useEffect(() => {
+  const fetchData = () => {
     axiosClient.get("/workflow-types").then((res) => setTypes(res.data));
     axiosClient.get("/workflows").then((res) => setWorkflows(res.data));
-  }, []);
+  };
+
+  useEffect(() => { fetchData(); }, []);
 
   const categoryBadge = (cat: string) => {
     const colors: Record<string, string> = {
@@ -38,33 +46,35 @@ export default function Workflows() {
     return <Badge bg={colors[cat] || "secondary"}>{cat}</Badge>;
   };
 
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    const wfType = types.find((t) => t.type_id === selectedTypeId);
+    if (!wfType) return;
+
+    await axiosClient.post("/workflows", {
+      type_id: selectedTypeId,
+      name: newName || wfType.type_name,
+      config: wfType.default_config,
+    });
+    setShowCreate(false);
+    setNewName("");
+    setSelectedTypeId(0);
+    fetchData();
+  };
+
   return (
     <Container fluid className="p-4">
-      <h3 className="mb-4">Workflow Types</h3>
-      <Table striped bordered hover size="sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Category</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {types.map((t) => (
-            <tr key={t.type_id}>
-              <td className="fw-bold">{t.type_name}</td>
-              <td>{categoryBadge(t.type_category)}</td>
-              <td>{t.type_desc}</td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
+      <div className="d-flex justify-content-between align-items-center mb-4">
+        <h3 className="mb-0">My Workflows</h3>
+        <Button variant="primary" onClick={() => setShowCreate(true)}>
+          + New Workflow
+        </Button>
+      </div>
 
-      <h3 className="mt-5 mb-4">My Workflows</h3>
       {workflows.length === 0 ? (
-        <p className="text-muted">No workflows configured yet.</p>
+        <p className="text-muted">No workflows configured yet. Click "+ New Workflow" to get started.</p>
       ) : (
-        <Table striped bordered hover size="sm">
+        <Table striped bordered hover>
           <thead>
             <tr>
               <th>Name</th>
@@ -72,13 +82,14 @@ export default function Workflows() {
               <th>Enabled</th>
               <th>Last Run</th>
               <th>Created</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {workflows.map((w) => (
               <tr key={w.workflow_id}>
-                <td>{w.name}</td>
-                <td>{types.find((t) => t.type_id === w.type_id)?.type_name || w.type_id}</td>
+                <td className="fw-bold">{w.name}</td>
+                <td>{categoryBadge(types.find((t) => t.type_id === w.type_id)?.type_category || "")} {types.find((t) => t.type_id === w.type_id)?.type_name || w.type_id}</td>
                 <td>
                   <Badge bg={w.enabled ? "success" : "secondary"}>
                     {w.enabled ? "Yes" : "No"}
@@ -86,11 +97,68 @@ export default function Workflows() {
                 </td>
                 <td>{w.last_run_at ? new Date(w.last_run_at).toLocaleString() : "Never"}</td>
                 <td>{new Date(w.created_at).toLocaleDateString()}</td>
+                <td>
+                  <Button size="sm" variant="outline-primary" onClick={() => navigate(`/app/workflows/${w.workflow_id}`)}>
+                    Open
+                  </Button>
+                </td>
               </tr>
             ))}
           </tbody>
         </Table>
       )}
+
+      <h4 className="mt-5 mb-3">Available Workflow Types</h4>
+      <Row className="g-3">
+        {types.map((t) => (
+          <Col md={6} lg={3} key={t.type_id}>
+            <div className="border rounded p-3 h-100">
+              <div className="mb-2">{categoryBadge(t.type_category)}</div>
+              <h6>{t.type_name}</h6>
+              <p className="text-muted small mb-0">{t.type_desc}</p>
+            </div>
+          </Col>
+        ))}
+      </Row>
+
+      <Modal show={showCreate} onHide={() => setShowCreate(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Create Workflow</Modal.Title>
+        </Modal.Header>
+        <Form onSubmit={handleCreate}>
+          <Modal.Body>
+            <Form.Group className="mb-3">
+              <Form.Label>Workflow Type</Form.Label>
+              <Form.Select
+                value={selectedTypeId}
+                onChange={(e) => setSelectedTypeId(Number(e.target.value))}
+                required
+              >
+                <option value={0}>Select a type...</option>
+                {types.map((t) => (
+                  <option key={t.type_id} value={t.type_id}>{t.type_name}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Name</Form.Label>
+              <Form.Control
+                type="text"
+                placeholder="Give it a name..."
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+              <Form.Text className="text-muted">
+                Leave blank to use the type name as default.
+              </Form.Text>
+            </Form.Group>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button variant="primary" type="submit" disabled={!selectedTypeId}>Create</Button>
+          </Modal.Footer>
+        </Form>
+      </Modal>
     </Container>
   );
 }
