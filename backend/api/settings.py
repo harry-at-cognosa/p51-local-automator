@@ -72,4 +72,6 @@ async def get_webapp_options(
         "app_title": settings.get("app_title", "Local Automator"),
         "navbar_color": settings.get("navbar_color", "slate"),
         "instance_label": settings.get("instance_label", ""),
+        "sw_version": settings.get("sw_version", ""),
+        "db_version": settings.get("db_version", ""),
     }

@@ -6,6 +6,8 @@ interface SettingsState {
   app_title: string;
   navbar_color: string;
   instance_label: string;
+  sw_version: string;
+  db_version: string;
   loaded: boolean;
   fetchSettings: () => Promise<void>;
 }
@@ -22,6 +24,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   app_title: "Local Automator",
   navbar_color: "slate",
   instance_label: "DEV",
+  sw_version: "",
+  db_version: "",
   loaded: false,
   fetchSettings: async () => {
     try {
@@ -34,6 +38,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           app_title: data.app_title || "Local Automator",
           navbar_color: color,
           instance_label: data.instance_label || "",
+          sw_version: data.sw_version || "",
+          db_version: data.db_version || "",
           loaded: true,
         });
       }
