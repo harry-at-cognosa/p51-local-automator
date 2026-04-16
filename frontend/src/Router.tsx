@@ -7,6 +7,7 @@ import Workflows from "./pages/Workflows";
 import WorkflowDetail from "./pages/WorkflowDetail";
 import RunDetail from "./pages/RunDetail";
 import ManageUsers from "./pages/ManageUsers";
+import ManageGroups from "./pages/ManageGroups";
 
 export const Router = createBrowserRouter([
   {
@@ -32,6 +33,10 @@ export const Router = createBrowserRouter([
       {
         path: "admin/users",
         element: <ManageUsers />,
+      },
+      {
+        path: "admin/groups",
+        element: <ManageGroups />,
       },
       {
         path: "logout",

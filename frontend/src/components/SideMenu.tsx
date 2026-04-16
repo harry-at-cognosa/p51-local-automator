@@ -31,6 +31,12 @@ export default function SideMenu() {
             </LinkContainer>
           </>
         )}
+
+        {auth.is_superuser && (
+          <LinkContainer to="/app/admin/groups">
+            <Nav.Link>Manage Groups</Nav.Link>
+          </LinkContainer>
+        )}
       </Nav>
     </div>
   );
