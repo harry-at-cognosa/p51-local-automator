@@ -31,9 +31,19 @@ _index_path = os.path.join(_static_dir, "index.html")
 if os.path.isdir(_assets_dir):
     app.mount("/app/assets", StaticFiles(directory=_assets_dir), name="static-assets")
 
+# Landing page at root
+_landing_dir = os.path.join(os.path.dirname(__file__), "landing")
+_landing_index = os.path.join(_landing_dir, "index.html")
+_landing_images = os.path.join(_landing_dir, "images")
+
+if os.path.isdir(_landing_images):
+    app.mount("/landing/images", StaticFiles(directory=_landing_images), name="landing-images")
+
 
 @app.get("/", include_in_schema=False)
 async def root():
+    if os.path.isfile(_landing_index):
+        return FileResponse(_landing_index, media_type="text/html")
     if os.path.isfile(_index_path):
         return FileResponse(_index_path)
     return {"detail": "Local Automator API", "docs": "/docs"}
