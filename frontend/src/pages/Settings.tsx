@@ -102,6 +102,16 @@ export default function Settings() {
     );
   };
 
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (name: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
   const renderValue = (s: Setting) => {
     if (s.name === "navbar_color") {
       return (
@@ -114,7 +124,30 @@ export default function Settings() {
         </span>
       );
     }
-    return s.value;
+
+    const isLong = s.value.length > 80;
+    const expanded = expandedRows.has(s.name);
+
+    return (
+      <div className="position-relative">
+        <div style={{
+          maxHeight: expanded ? "none" : "2.8em",
+          overflow: expanded ? "auto" : "hidden",
+          lineHeight: "1.4em",
+        }}>
+          {s.value}
+        </div>
+        {isLong && (
+          <button
+            onClick={() => toggleExpand(s.name)}
+            className="btn btn-link btn-sm p-0 text-muted position-absolute"
+            style={{ bottom: 0, right: 0, fontSize: "0.7em", lineHeight: 1 }}
+          >
+            {expanded ? "less" : "more..."}
+          </button>
+        )}
+      </div>
+    );
   };
 
   return (
