@@ -12,6 +12,7 @@ from backend.api.scheduler import router_scheduler
 from backend.api.manage_users import router_manage_users
 from backend.api.manage_groups import router_manage_groups
 from backend.api.group_settings import router_group_settings
+from backend.api.artifacts import router_artifacts
 
 api_router = APIRouter(prefix=API_URL_PREFIX)
 
@@ -32,3 +33,4 @@ api_router.include_router(router_scheduler)
 api_router.include_router(router_manage_users, tags=["Manage Users"])
 api_router.include_router(router_manage_groups, tags=["Manage Groups"])
 api_router.include_router(router_group_settings, tags=["Group Settings"])
+api_router.include_router(router_artifacts, tags=["Artifacts"])

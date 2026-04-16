@@ -159,7 +159,8 @@ export default function RunDetail() {
                   <th style={{width: 60}}>Type</th>
                   <th>Description</th>
                   <th>Size</th>
-                  <th>Path</th>
+                  <th>File</th>
+                  <th style={{width: 90}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -170,7 +171,29 @@ export default function RunDetail() {
                     </td>
                     <td>{a.description}</td>
                     <td>{formatSize(a.file_size)}</td>
-                    <td className="text-muted small font-monospace">{a.file_path.split("/").slice(-3).join("/")}</td>
+                    <td className="text-muted small font-monospace">{a.file_path.split("/").pop()}</td>
+                    <td>
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={async () => {
+                          const token = localStorage.getItem("token");
+                          const res = await fetch(`/api/v1/artifacts/${a.artifact_id}/download`, {
+                            headers: { Authorization: `Bearer ${token}` },
+                          });
+                          if (!res.ok) return;
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement("a");
+                          link.href = url;
+                          link.download = a.file_path.split("/").pop() || "download";
+                          link.click();
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        Download
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
