@@ -85,7 +85,14 @@ async def update_user(
     if payload.is_superuser is not None and not user.is_superuser:
         raise HTTPException(status_code=400, detail="Only superusers can change superuser status")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    # Handle password separately — hash it
+    if "password" in updates:
+        pw = updates.pop("password")
+        if pw:
+            target.hashed_password = password_helper.hash(pw)
+
+    for field, value in updates.items():
         setattr(target, field, value)
 
     await session.commit()

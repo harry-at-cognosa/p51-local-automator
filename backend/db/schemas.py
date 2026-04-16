@@ -103,6 +103,7 @@ class UserManageCreate(BaseModel):
 class UserManageUpdate(BaseModel):
     full_name: str | None = None
     email: str | None = None
+    password: str | None = None
     group_id: int | None = None
     is_active: bool | None = None
     is_superuser: bool | None = None

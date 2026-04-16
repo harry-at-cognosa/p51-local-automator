@@ -15,11 +15,31 @@ interface ManagedUser {
   last_seen: string | null;
 }
 
+interface Group {
+  group_id: number;
+  group_name: string;
+}
+
+const emptyCreate = {
+  user_name: "",
+  full_name: "",
+  email: "",
+  password: "",
+  group_id: 2,
+  is_manager: false,
+  is_groupadmin: false,
+};
+
 export default function ManageUsers() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({
-    user_name: "",
+  const [form, setForm] = useState({ ...emptyCreate });
+
+  // Edit state
+  const [showEdit, setShowEdit] = useState(false);
+  const [editUser, setEditUser] = useState<ManagedUser | null>(null);
+  const [editForm, setEditForm] = useState({
     full_name: "",
     email: "",
     password: "",
@@ -32,17 +52,58 @@ export default function ManageUsers() {
     axiosClient.get("/manage/users").then((res) => setUsers(res.data));
   };
 
-  useEffect(() => { fetchUsers(); }, []);
+  useEffect(() => {
+    fetchUsers();
+    axiosClient.get("/manage/groups").then((res) => setGroups(res.data)).catch(() => {});
+  }, []);
+
+  const groupName = (id: number) => groups.find((g) => g.group_id === id)?.group_name || `Group ${id}`;
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     try {
       await axiosClient.post("/manage/users", form);
       setShowCreate(false);
-      setForm({ user_name: "", full_name: "", email: "", password: "", group_id: 2, is_manager: false, is_groupadmin: false });
+      setForm({ ...emptyCreate });
       fetchUsers();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to create user";
+      alert(msg);
+    }
+  };
+
+  const openEdit = (u: ManagedUser) => {
+    setEditUser(u);
+    setEditForm({
+      full_name: u.full_name,
+      email: u.email,
+      password: "",
+      group_id: u.group_id,
+      is_manager: u.is_manager,
+      is_groupadmin: u.is_groupadmin,
+    });
+    setShowEdit(true);
+  };
+
+  const handleEdit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editUser) return;
+    try {
+      const payload: Record<string, unknown> = {
+        full_name: editForm.full_name,
+        email: editForm.email,
+        group_id: editForm.group_id,
+        is_manager: editForm.is_manager,
+        is_groupadmin: editForm.is_groupadmin,
+      };
+      if (editForm.password) {
+        payload.password = editForm.password;
+      }
+      await axiosClient.put(`/manage/users/${editUser.user_id}`, payload);
+      setShowEdit(false);
+      fetchUsers();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to update user";
       alert(msg);
     }
   };
@@ -87,7 +148,7 @@ export default function ManageUsers() {
               <td className="fw-bold">{u.user_name}</td>
               <td>{u.full_name}</td>
               <td>{u.email}</td>
-              <td>{u.group_id}</td>
+              <td>{groupName(u.group_id)}</td>
               <td>{roleBadges(u)}</td>
               <td>
                 <Badge bg={u.is_active ? "success" : "secondary"}>
@@ -96,15 +157,19 @@ export default function ManageUsers() {
               </td>
               <td>{u.last_seen ? new Date(u.last_seen).toLocaleString() : "Never"}</td>
               <td>
-                <Button size="sm" variant={u.is_active ? "outline-warning" : "outline-success"} onClick={() => toggleActive(u)}>
-                  {u.is_active ? "Disable" : "Enable"}
-                </Button>
+                <div className="d-flex gap-1">
+                  <Button size="sm" variant="outline-primary" onClick={() => openEdit(u)}>Edit</Button>
+                  <Button size="sm" variant={u.is_active ? "outline-warning" : "outline-success"} onClick={() => toggleActive(u)}>
+                    {u.is_active ? "Disable" : "Enable"}
+                  </Button>
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </Table>
 
+      {/* Create User Modal */}
       <Modal show={showCreate} onHide={() => setShowCreate(false)}>
         <Modal.Header closeButton>
           <Modal.Title>Create User</Modal.Title>
@@ -159,38 +224,100 @@ export default function ManageUsers() {
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label>Group ID</Form.Label>
-                  <Form.Control
-                    type="number"
+                  <Form.Label>Group</Form.Label>
+                  <Form.Select
                     value={form.group_id}
                     onChange={(e) => setForm({ ...form, group_id: Number(e.target.value) })}
-                    required
-                  />
+                  >
+                    {groups.map((g) => (
+                      <option key={g.group_id} value={g.group_id}>{g.group_name}</option>
+                    ))}
+                  </Form.Select>
                 </Form.Group>
               </Col>
               <Col md={4}>
-                <Form.Check
-                  type="switch"
-                  label="Manager"
-                  className="mt-4"
-                  checked={form.is_manager}
-                  onChange={(e) => setForm({ ...form, is_manager: e.target.checked })}
-                />
+                <Form.Check type="switch" label="Manager" className="mt-4"
+                  checked={form.is_manager} onChange={(e) => setForm({ ...form, is_manager: e.target.checked })} />
               </Col>
               <Col md={4}>
-                <Form.Check
-                  type="switch"
-                  label="Group Admin"
-                  className="mt-4"
-                  checked={form.is_groupadmin}
-                  onChange={(e) => setForm({ ...form, is_groupadmin: e.target.checked })}
-                />
+                <Form.Check type="switch" label="Group Admin" className="mt-4"
+                  checked={form.is_groupadmin} onChange={(e) => setForm({ ...form, is_groupadmin: e.target.checked })} />
               </Col>
             </Row>
           </Modal.Body>
           <Modal.Footer>
             <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button variant="primary" type="submit">Create</Button>
+          </Modal.Footer>
+        </Form>
+      </Modal>
+
+      {/* Edit User Modal */}
+      <Modal show={showEdit} onHide={() => setShowEdit(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Edit User: {editUser?.user_name}</Modal.Title>
+        </Modal.Header>
+        <Form onSubmit={handleEdit}>
+          <Modal.Body>
+            <Row className="g-3">
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Full Name</Form.Label>
+                  <Form.Control
+                    type="text"
+                    value={editForm.full_name}
+                    onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Email</Form.Label>
+                  <Form.Control
+                    type="email"
+                    value={editForm.email}
+                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                    required
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>New Password</Form.Label>
+                  <Form.Control
+                    type="password"
+                    value={editForm.password}
+                    onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                    placeholder="Leave blank to keep current"
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Group</Form.Label>
+                  <Form.Select
+                    value={editForm.group_id}
+                    onChange={(e) => setEditForm({ ...editForm, group_id: Number(e.target.value) })}
+                  >
+                    {groups.map((g) => (
+                      <option key={g.group_id} value={g.group_id}>{g.group_name}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Check type="switch" label="Manager" className="mt-2"
+                  checked={editForm.is_manager} onChange={(e) => setEditForm({ ...editForm, is_manager: e.target.checked })} />
+              </Col>
+              <Col md={4}>
+                <Form.Check type="switch" label="Group Admin" className="mt-2"
+                  checked={editForm.is_groupadmin} onChange={(e) => setEditForm({ ...editForm, is_groupadmin: e.target.checked })} />
+              </Col>
+            </Row>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowEdit(false)}>Cancel</Button>
+            <Button variant="primary" type="submit">Save Changes</Button>
           </Modal.Footer>
         </Form>
       </Modal>
