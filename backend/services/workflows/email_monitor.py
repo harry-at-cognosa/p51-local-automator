@@ -83,6 +83,7 @@ async def run_email_monitor(
     mailbox = config.get("mailbox", "INBOX")
     period = config.get("period", "last 7 days")
     topics = config.get("topics") or DEFAULT_TOPICS
+    scope = config.get("scope", "")
 
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger)
     output_dir = engine.get_run_output_dir(workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
@@ -125,7 +126,7 @@ async def run_email_monitor(
         # ── Step 2: Categorize with LLM ──────────────────────
         step2 = await engine.start_step(session, run.run_id, 2, "Categorize emails")
 
-        llm_result = llm_service.categorize_emails(enriched, topics)
+        llm_result = llm_service.categorize_emails(enriched, topics, scope=scope)
         categorized = llm_result["result"]
         usage = llm_result["usage"]
         total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)

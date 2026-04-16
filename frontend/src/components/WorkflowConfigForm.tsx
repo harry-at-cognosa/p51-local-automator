@@ -85,6 +85,21 @@ export default function WorkflowConfigForm({ typeId, config, onChange }: Props) 
               />
             </Form.Group>
           </Col>
+          <Col md={12}>
+            <Form.Group>
+              <Form.Label>
+                Scope <span className="text-muted fw-normal">("all" = everything, or describe a focus area)</span>
+              </Form.Label>
+              <Form.Control
+                placeholder='e.g. "all", "AI and machine learning", "client projects", "financial matters"'
+                value={(config.scope as string) || ""}
+                onChange={(e) => set("scope", e.target.value)}
+              />
+              <Form.Text className="text-muted">
+                When set, the AI will only categorize emails related to this scope and skip the rest.
+              </Form.Text>
+            </Form.Group>
+          </Col>
         </Row>
         {topics.length > 0 && (
           <div className="mt-2">

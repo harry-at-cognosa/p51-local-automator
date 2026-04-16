@@ -22,6 +22,7 @@ WORKFLOW_TYPE_DEFAULTS = [
             "mailbox": "INBOX",
             "period": "last 7 days",
             "topics": [],
+            "scope": "",
         },
         "required_services": ["apple_mail_mcp"],
     },

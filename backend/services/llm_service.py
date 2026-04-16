@@ -68,24 +68,34 @@ def judge_structured(
     return {"result": result, "usage": usage}
 
 
-def categorize_emails(emails: list[dict], topics: list[str]) -> dict:
+def categorize_emails(emails: list[dict], topics: list[str], scope: str = "") -> dict:
     """Categorize a batch of emails by topic and urgency.
 
     Args:
         emails: List of dicts with keys: sender, subject, snippet, date
         topics: List of topic names (e.g. ["Business & Finance", "Technology & AI"])
+        scope: Focus area filter. "all" or empty = include everything.
+               Otherwise, only categorize emails related to the scope description.
 
     Returns:
         dict with "result" (list of categorized emails) and "usage" (token counts)
     """
     topic_list = "\n".join(f"- {t}" for t in topics)
 
+    scope_instruction = ""
+    if scope and scope.lower().strip() not in ("all", ""):
+        scope_instruction = f"""
+IMPORTANT — SCOPE FILTER: Only categorize emails that are related to: "{scope}"
+For emails that are NOT related to this scope, set topic to "Out of Scope" and urgent to false.
+Do NOT skip them — include every email in the output, but mark unrelated ones as "Out of Scope".
+"""
+
     system = f"""You are an email categorization assistant. You will receive a batch of emails
 and must categorize each one into exactly ONE of the following topics:
 
 {topic_list}
 - Other (if none fit well)
-
+{scope_instruction}
 For each email, also assess urgency:
 - urgent: true if the email requires action, has a deadline, involves financial obligations, or is time-sensitive
 - urgent: false for newsletters, notifications, marketing, and informational emails
