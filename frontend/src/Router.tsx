@@ -9,6 +9,7 @@ import RunDetail from "./pages/RunDetail";
 import ManageUsers from "./pages/ManageUsers";
 import ManageGroups from "./pages/ManageGroups";
 import Settings from "./pages/Settings";
+import GroupSettings from "./pages/GroupSettings";
 
 export const Router = createBrowserRouter([
   {
@@ -42,6 +43,10 @@ export const Router = createBrowserRouter([
       {
         path: "admin/settings",
         element: <Settings />,
+      },
+      {
+        path: "admin/group-settings",
+        element: <GroupSettings />,
       },
       {
         path: "logout",

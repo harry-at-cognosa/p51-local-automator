@@ -31,6 +31,9 @@ export default function SideMenu() {
             <LinkContainer to="/app/admin/users">
               <Nav.Link>Manage Users</Nav.Link>
             </LinkContainer>
+            <LinkContainer to="/app/admin/group-settings">
+              <Nav.Link>Group Settings</Nav.Link>
+            </LinkContainer>
           </>
         )}
 
@@ -40,7 +43,7 @@ export default function SideMenu() {
               <Nav.Link>Manage Groups</Nav.Link>
             </LinkContainer>
             <LinkContainer to="/app/admin/settings">
-              <Nav.Link>Settings</Nav.Link>
+              <Nav.Link>Global Settings</Nav.Link>
             </LinkContainer>
           </>
         )}
