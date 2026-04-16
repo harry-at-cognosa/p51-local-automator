@@ -8,7 +8,21 @@ export default function TopNavBar() {
   const { app_title, instance_label } = useSettingsStore();
 
   return (
-    <Navbar expand="lg" className="px-3" bg="dark" data-bs-theme="dark">
+    <Navbar expand="lg" className="px-3" variant="light"
+      style={{ backgroundColor: "var(--theme-color-300, #cbd5e1)" }}
+    >
+      <style>{`
+        .navbar .nav-link, .navbar .navbar-brand {
+          color: var(--theme-color-900) !important;
+        }
+        .navbar .nav-link:hover {
+          background-color: var(--theme-color-400) !important;
+          border-radius: 4px;
+        }
+        .navbar .dropdown-toggle::after {
+          color: var(--theme-color-800);
+        }
+      `}</style>
       <Container fluid>
         <LinkContainer to="/app">
           <Navbar.Brand className="fw-bold">
@@ -16,7 +30,10 @@ export default function TopNavBar() {
             {instance_label && (
               <>
                 {" "}
-                <Badge bg="secondary" className="ms-2" style={{ fontSize: "0.65em" }}>
+                <Badge
+                  className="ms-2"
+                  style={{ fontSize: "0.65em", backgroundColor: "var(--theme-color-600)" }}
+                >
                   {instance_label}
                 </Badge>
               </>

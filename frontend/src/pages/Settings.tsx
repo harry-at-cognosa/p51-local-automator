@@ -1,6 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Container, Table, Button, Modal, Form, Row, Col } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import getColor from "../api/getColor";
+
+const COLOR_NAMES = [
+  "slate","gray","zinc","stone","red","orange","amber","yellow","lime","green",
+  "emerald","teal","cyan","sky","blue","indigo","violet","purple","fuchsia","pink","rose",
+];
 
 interface Setting {
   name: string;
@@ -14,6 +21,7 @@ export default function Settings() {
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
+  const { fetchSettings: refreshTheme } = useSettingsStore();
 
   const fetchSettings = () => {
     axiosClient.get("/settings").then((res) => setSettings(res.data));
@@ -31,6 +39,9 @@ export default function Settings() {
     await axiosClient.put(`/settings/${editingName}`, { value: editValue });
     setEditingName(null);
     fetchSettings();
+    if (["navbar_color", "app_title", "instance_label"].includes(editingName)) {
+      refreshTheme();
+    }
   };
 
   const handleAdd = async (e: FormEvent) => {
@@ -46,6 +57,64 @@ export default function Settings() {
     if (!confirm(`Delete setting "${name}"?`)) return;
     await axiosClient.delete(`/settings/${name}`);
     fetchSettings();
+  };
+
+  const renderEditControl = (name: string) => {
+    if (name === "navbar_color") {
+      return (
+        <div className="d-flex gap-2 align-items-center">
+          <Form.Select
+            size="sm"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            style={{ width: 160 }}
+          >
+            {COLOR_NAMES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </Form.Select>
+          <div className="d-flex gap-1">
+            {[300, 500, 700].map((shade) => (
+              <span
+                key={shade}
+                className="d-inline-block rounded"
+                style={{ width: 20, height: 20, backgroundColor: getColor(editValue, shade) }}
+              />
+            ))}
+          </div>
+          <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
+          <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>Cancel</Button>
+        </div>
+      );
+    }
+    return (
+      <div className="d-flex gap-2">
+        <Form.Control
+          size="sm"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          autoFocus
+          onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingName(null); }}
+        />
+        <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
+        <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>Cancel</Button>
+      </div>
+    );
+  };
+
+  const renderValue = (s: Setting) => {
+    if (s.name === "navbar_color") {
+      return (
+        <span className="d-flex align-items-center gap-2">
+          {s.value}
+          <span
+            className="d-inline-block rounded"
+            style={{ width: 16, height: 16, backgroundColor: getColor(s.value, 500) }}
+          />
+        </span>
+      );
+    }
+    return s.value;
   };
 
   return (
@@ -68,21 +137,7 @@ export default function Settings() {
             <tr key={s.name}>
               <td className="fw-bold font-monospace">{s.name}</td>
               <td>
-                {editingName === s.name ? (
-                  <div className="d-flex gap-2">
-                    <Form.Control
-                      size="sm"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      autoFocus
-                      onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingName(null); }}
-                    />
-                    <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
-                    <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>Cancel</Button>
-                  </div>
-                ) : (
-                  <span>{s.value}</span>
-                )}
+                {editingName === s.name ? renderEditControl(s.name) : renderValue(s)}
               </td>
               <td>
                 {editingName !== s.name && (
