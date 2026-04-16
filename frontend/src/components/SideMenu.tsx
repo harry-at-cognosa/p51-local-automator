@@ -20,14 +20,14 @@ export default function SideMenu() {
           <Nav.Link>Workflows</Nav.Link>
         </LinkContainer>
 
-        {auth.is_superuser && (
+        {(auth.is_groupadmin || auth.is_superuser) && (
           <>
             <hr className="my-2" />
             <small className="text-muted text-uppercase fw-bold mb-2">
               Administration
             </small>
-            <LinkContainer to="/app/su/settings">
-              <Nav.Link>Settings</Nav.Link>
+            <LinkContainer to="/app/admin/users">
+              <Nav.Link>Manage Users</Nav.Link>
             </LinkContainer>
           </>
         )}

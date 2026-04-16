@@ -1,7 +1,7 @@
 """Idempotent seed: inserts default data only if tables are empty."""
 import asyncio
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import DEFAULT_ADMIN_PASSWORD
@@ -102,6 +102,12 @@ async def _seed(session: AsyncSession):
     session.add_all(settings)
 
     await session.commit()
+
+    # Fix sequences after explicit ID inserts
+    await session.execute(text("SELECT setval(pg_get_serial_sequence('api_users', 'user_id'), (SELECT MAX(user_id) FROM api_users))"))
+    await session.execute(text("SELECT setval(pg_get_serial_sequence('api_groups', 'group_id'), (SELECT MAX(group_id) FROM api_groups))"))
+    await session.commit()
+
     print("[seed] Default data seeded successfully.")
 
 

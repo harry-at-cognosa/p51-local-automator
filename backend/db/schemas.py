@@ -59,6 +59,57 @@ class UsersMe(BaseModel):
     is_manager: bool
 
 
+# ── User management schemas ──────────────────────────────────
+
+
+class UserManageRead(BaseModel):
+    user_id: int
+    group_id: int
+    email: str
+    user_name: str
+    full_name: str
+    is_active: bool
+    is_superuser: bool
+    is_groupadmin: bool
+    is_manager: bool
+    created_at: datetime | None = None
+    last_seen: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class UserManageCreate(BaseModel):
+    group_id: int
+    email: str
+    user_name: str = Field(..., min_length=3, max_length=32)
+    full_name: str = ""
+    password: str = Field(..., min_length=4)
+    is_active: bool = True
+    is_superuser: bool = False
+    is_groupadmin: bool = False
+    is_manager: bool = False
+
+    @field_validator("user_name")
+    @classmethod
+    def validate_user_name(cls, v: str) -> str:
+        import re
+        v = v.lower()
+        if not re.match(r"^[a-z0-9_-]+$", v):
+            raise ValueError("user_name must contain only lowercase letters, numbers, underscores, or hyphens")
+        return v
+
+
+class UserManageUpdate(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+    group_id: int | None = None
+    is_active: bool | None = None
+    is_superuser: bool | None = None
+    is_groupadmin: bool | None = None
+    is_manager: bool | None = None
+
+
 # ── Workflow schemas ─────────────────────────────────────────
 
 

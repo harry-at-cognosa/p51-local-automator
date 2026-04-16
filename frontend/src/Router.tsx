@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import Workflows from "./pages/Workflows";
 import WorkflowDetail from "./pages/WorkflowDetail";
 import RunDetail from "./pages/RunDetail";
+import ManageUsers from "./pages/ManageUsers";
 
 export const Router = createBrowserRouter([
   {
@@ -27,6 +28,10 @@ export const Router = createBrowserRouter([
       {
         path: "runs/:runId",
         element: <RunDetail />,
+      },
+      {
+        path: "admin/users",
+        element: <ManageUsers />,
       },
       {
         path: "logout",
