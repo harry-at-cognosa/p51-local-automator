@@ -177,18 +177,20 @@ export default function RunDetail() {
                         size="sm"
                         variant="outline-primary"
                         onClick={async () => {
-                          const token = localStorage.getItem("token");
-                          const res = await fetch(`/api/v1/artifacts/${a.artifact_id}/download`, {
-                            headers: { Authorization: `Bearer ${token}` },
-                          });
-                          if (!res.ok) return;
-                          const blob = await res.blob();
-                          const url = URL.createObjectURL(blob);
-                          const link = document.createElement("a");
-                          link.href = url;
-                          link.download = a.file_path.split("/").pop() || "download";
-                          link.click();
-                          URL.revokeObjectURL(url);
+                          try {
+                            const res = await axiosClient.get(`/artifacts/${a.artifact_id}/download`, {
+                              responseType: "blob",
+                            });
+                            const blob = new Blob([res.data]);
+                            const url = URL.createObjectURL(blob);
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = a.file_path.split("/").pop() || "download";
+                            link.click();
+                            URL.revokeObjectURL(url);
+                          } catch (err) {
+                            console.error("Download failed", err);
+                          }
                         }}
                       >
                         Download

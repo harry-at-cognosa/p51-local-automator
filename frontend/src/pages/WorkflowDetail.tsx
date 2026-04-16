@@ -168,6 +168,26 @@ export default function WorkflowDetail() {
             </Card.Body>
           </Card>
 
+          <Card className="mt-3">
+            <Card.Header>Pipeline Steps</Card.Header>
+            <Card.Body className="py-2">
+              {(() => {
+                const stepsByType: Record<number, string[]> = {
+                  1: ["Fetch emails via MCP", "Categorize with AI", "Generate Excel report"],
+                  2: ["Analyze data (profile, filter, chart, quality)"],
+                  3: ["Fetch calendar events via MCP", "Analyze with AI (conflicts, importance)"],
+                  4: ["Execute SQL query", "Analyze results with AI"],
+                };
+                const steps = stepsByType[workflow.type_id] || ["Run workflow"];
+                return (
+                  <ol className="mb-0 ps-3" style={{ fontSize: "0.85em" }}>
+                    {steps.map((s, i) => <li key={i} className="text-muted">{s}</li>)}
+                  </ol>
+                );
+              })()}
+            </Card.Body>
+          </Card>
+
           {workflow.schedule && (
             <Card className="mt-3">
               <Card.Header>Schedule</Card.Header>
