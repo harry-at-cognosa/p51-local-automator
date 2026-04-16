@@ -6,6 +6,7 @@ from backend.db.session import async_get_session
 from backend.db.models import User, UserWorkflows, WorkflowRuns
 from backend.db.schemas import DashboardStats
 from backend.auth.users import current_active_user
+from backend.services.scheduler_service import scheduler
 
 router_dashboard = APIRouter(prefix="/dashboard")
 
@@ -38,5 +39,5 @@ async def get_stats(
         total_workflows=workflows_count,
         total_runs=runs_count,
         runs_today=runs_today,
-        scheduler_running=False,
+        scheduler_running=scheduler.is_running,
     )

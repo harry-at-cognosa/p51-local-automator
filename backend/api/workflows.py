@@ -141,7 +141,10 @@ async def list_runs(
 # ── Trigger a workflow run ───────────────────────────────────
 
 WORKFLOW_RUNNERS = {
-    1: "email_monitor",  # type_id -> runner name
+    1: "email_monitor",
+    2: "data_analyzer",
+    3: "calendar_digest",
+    4: "sql_runner",
 }
 
 
@@ -155,6 +158,15 @@ async def _run_workflow_background(workflow_id: int):
         if workflow.type_id == 1:
             from backend.services.workflows.email_monitor import run_email_monitor
             await run_email_monitor(session, workflow, trigger="manual")
+        elif workflow.type_id == 2:
+            from backend.services.workflows.data_analyzer import run_data_analyzer
+            await run_data_analyzer(session, workflow, trigger="manual")
+        elif workflow.type_id == 3:
+            from backend.services.workflows.calendar_digest import run_calendar_digest
+            await run_calendar_digest(session, workflow, trigger="manual")
+        elif workflow.type_id == 4:
+            from backend.services.workflows.sql_runner import run_sql_runner
+            await run_sql_runner(session, workflow, trigger="manual")
 
 
 @router_workflows.post("/workflows/{workflow_id}/run", response_model=dict)
