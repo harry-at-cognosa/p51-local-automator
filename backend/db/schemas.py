@@ -1,0 +1,162 @@
+import uuid
+from datetime import datetime
+
+from fastapi_users import schemas
+from pydantic import BaseModel, Field, field_validator
+
+
+# ── User schemas (fastapi-users) ─────────────────────────────
+
+
+class UserRead(schemas.BaseUser[uuid.UUID]):
+    user_id: int
+    group_id: int
+    user_name: str
+    full_name: str
+    is_groupadmin: bool = False
+    is_manager: bool = False
+    created_at: datetime | None = None
+
+
+class UserCreate(schemas.BaseUserCreate):
+    user_id: int | None = None
+    group_id: int
+    user_name: str = Field(..., min_length=3, max_length=32)
+    full_name: str = ""
+    is_groupadmin: bool = False
+    is_manager: bool = False
+
+    @field_validator("user_name")
+    @classmethod
+    def validate_user_name(cls, v: str) -> str:
+        import re
+        v = v.lower()
+        if not re.match(r"^[a-z0-9_-]+$", v):
+            raise ValueError("user_name must contain only lowercase letters, numbers, underscores, or hyphens")
+        return v
+
+
+class UserUpdate(schemas.BaseUserUpdate):
+    user_name: str | None = None
+    full_name: str | None = None
+    group_id: int | None = None
+    is_groupadmin: bool | None = None
+    is_manager: bool | None = None
+
+
+class UsersMe(BaseModel):
+    id: uuid.UUID
+    user_id: int
+    group_id: int
+    group_name: str
+    email: str
+    user_name: str
+    full_name: str
+    is_active: bool
+    is_superuser: bool
+    is_verified: bool
+    is_groupadmin: bool
+    is_manager: bool
+
+
+# ── Workflow schemas ─────────────────────────────────────────
+
+
+class WorkflowTypeRead(BaseModel):
+    type_id: int
+    type_name: str
+    type_desc: str
+    type_category: str
+    default_config: dict
+    required_services: list | dict
+    enabled: bool
+
+    class Config:
+        from_attributes = True
+
+
+class UserWorkflowCreate(BaseModel):
+    type_id: int
+    name: str
+    config: dict = {}
+    schedule: dict | None = None
+    enabled: bool = True
+
+
+class UserWorkflowRead(BaseModel):
+    workflow_id: int
+    user_id: int
+    group_id: int
+    type_id: int
+    name: str
+    config: dict
+    schedule: dict | None
+    enabled: bool
+    last_run_at: datetime | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserWorkflowUpdate(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+    schedule: dict | None = None
+    enabled: bool | None = None
+
+
+class WorkflowRunRead(BaseModel):
+    run_id: int
+    workflow_id: int
+    status: str
+    current_step: int
+    total_steps: int
+    trigger: str
+    started_at: datetime
+    completed_at: datetime | None
+    error_detail: str | None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepRead(BaseModel):
+    step_id: int
+    run_id: int
+    step_number: int
+    step_name: str
+    status: str
+    started_at: datetime | None
+    completed_at: datetime | None
+    output_summary: str | None
+    artifacts: dict | None
+    llm_tokens_used: int
+    error_detail: str | None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowArtifactRead(BaseModel):
+    artifact_id: int
+    run_id: int
+    step_id: int | None
+    file_path: str
+    file_type: str
+    file_size: int
+    description: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ── Dashboard schemas ────────────────────────────────────────
+
+
+class DashboardStats(BaseModel):
+    total_workflows: int = 0
+    total_runs: int = 0
+    runs_today: int = 0
+    scheduler_running: bool = False
