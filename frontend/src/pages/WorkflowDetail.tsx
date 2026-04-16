@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Container, Row, Col, Card, Button, Badge, Table, Alert, Spinner,
-  Form, Modal,
+  Modal,
 } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
+import WorkflowConfigForm from "../components/WorkflowConfigForm";
 
 interface UserWorkflow {
   workflow_id: number;
@@ -39,7 +40,7 @@ export default function WorkflowDetail() {
   const [running, setRunning] = useState(false);
   const [runMessage, setRunMessage] = useState("");
   const [showConfig, setShowConfig] = useState(false);
-  const [configJson, setConfigJson] = useState("");
+  const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
 
   const fetchData = () => {
     axiosClient.get(`/workflows/${id}`).then((res) => setWorkflow(res.data));
@@ -74,8 +75,7 @@ export default function WorkflowDetail() {
 
   const saveConfig = async () => {
     try {
-      const parsed = JSON.parse(configJson);
-      await axiosClient.put(`/workflows/${id}`, { config: parsed });
+      await axiosClient.put(`/workflows/${id}`, { config: editConfig });
       setShowConfig(false);
       fetchData();
     } catch {
@@ -119,7 +119,7 @@ export default function WorkflowDetail() {
           >
             {running ? <><Spinner size="sm" animation="border" className="me-1" /> Running...</> : "Run Now"}
           </Button>
-          <Button variant="outline-secondary" onClick={() => { setConfigJson(JSON.stringify(workflow.config, null, 2)); setShowConfig(true); }}>
+          <Button variant="outline-secondary" onClick={() => { setEditConfig({ ...workflow.config }); setShowConfig(true); }}>
             Edit Config
           </Button>
           <Button variant="outline-danger" onClick={deleteWorkflow}>Delete</Button>
@@ -208,13 +208,7 @@ export default function WorkflowDetail() {
           <Modal.Title>Edit Configuration</Modal.Title>
         </Modal.Header>
         <Modal.Body>
-          <Form.Control
-            as="textarea"
-            rows={15}
-            value={configJson}
-            onChange={(e) => setConfigJson(e.target.value)}
-            style={{ fontFamily: "monospace", fontSize: "0.9em" }}
-          />
+          <WorkflowConfigForm typeId={workflow.type_id} config={editConfig} onChange={setEditConfig} />
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowConfig(false)}>Cancel</Button>

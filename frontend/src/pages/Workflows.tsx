@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Container, Table, Badge, Button, Modal, Form, Row, Col } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
+import WorkflowConfigForm from "../components/WorkflowConfigForm";
 
 interface WorkflowType {
   type_id: number;
@@ -28,6 +29,7 @@ export default function Workflows() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedTypeId, setSelectedTypeId] = useState<number>(0);
   const [newName, setNewName] = useState("");
+  const [newConfig, setNewConfig] = useState<Record<string, unknown>>({});
   const navigate = useNavigate();
 
   const fetchData = () => {
@@ -54,11 +56,12 @@ export default function Workflows() {
     await axiosClient.post("/workflows", {
       type_id: selectedTypeId,
       name: newName || wfType.type_name,
-      config: wfType.default_config,
+      config: newConfig,
     });
     setShowCreate(false);
     setNewName("");
     setSelectedTypeId(0);
+    setNewConfig({});
     fetchData();
   };
 
@@ -121,7 +124,7 @@ export default function Workflows() {
         ))}
       </Row>
 
-      <Modal show={showCreate} onHide={() => setShowCreate(false)}>
+      <Modal show={showCreate} onHide={() => setShowCreate(false)} size="lg">
         <Modal.Header closeButton>
           <Modal.Title>Create Workflow</Modal.Title>
         </Modal.Header>
@@ -131,7 +134,12 @@ export default function Workflows() {
               <Form.Label>Workflow Type</Form.Label>
               <Form.Select
                 value={selectedTypeId}
-                onChange={(e) => setSelectedTypeId(Number(e.target.value))}
+                onChange={(e) => {
+                  const id = Number(e.target.value);
+                  setSelectedTypeId(id);
+                  const wfType = types.find((t) => t.type_id === id);
+                  setNewConfig(wfType ? { ...wfType.default_config } : {});
+                }}
                 required
               >
                 <option value={0}>Select a type...</option>
@@ -152,6 +160,13 @@ export default function Workflows() {
                 Leave blank to use the type name as default.
               </Form.Text>
             </Form.Group>
+            {selectedTypeId > 0 && (
+              <>
+                <hr />
+                <h6 className="mb-3">Configuration</h6>
+                <WorkflowConfigForm typeId={selectedTypeId} config={newConfig} onChange={setNewConfig} />
+              </>
+            )}
           </Modal.Body>
           <Modal.Footer>
             <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
