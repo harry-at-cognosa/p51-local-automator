@@ -64,13 +64,28 @@ python3 -m uvicorn backend.main:app --port 8000
 # Login: admin / admin
 ```
 
-## MCP Servers (optional, for email/calendar workflows)
+## MCP Servers
 
-```bash
-# These run automatically when workflows trigger — no manual setup needed.
-# Ensure npx is available (comes with Node.js).
-# Apple Mail and Calendar must be configured in Mail.app / Calendar.app.
-```
+The platform uses local MCP (Model Context Protocol) servers to access Apple and Google services. These run as subprocesses — no manual startup needed.
+
+### Included
+
+| Server | Package | Services | Source |
+|---|---|---|---|
+| Apple Mail | `@griches/apple-mail-mcp` | Search, read, send email via Mail.app | [GitHub](https://github.com/griches/apple-mcp) |
+| Apple Calendar | `@griches/apple-calendar-mcp` | List, search, create events via Calendar.app | [GitHub](https://github.com/griches/apple-mcp) |
+
+### Planned
+
+| Server | Package | Services | Source |
+|---|---|---|---|
+| Google Workspace | `workspace-mcp` (taylorwilsdon) | Gmail, Drive, Sheets, Calendar, Docs + 7 more | [GitHub](https://github.com/taylorwilsdon/google_workspace_mcp) |
+
+### Prerequisites
+
+- `npx` must be available (comes with Node.js)
+- Apple Mail and Calendar must be configured with the accounts you want to monitor
+- Google Workspace MCP requires a Google Cloud project with OAuth 2.0 credentials (one-time setup)
 
 ## Roles
 
