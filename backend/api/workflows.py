@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.session import async_get_session
-from backend.db.models import User, WorkflowTypes, UserWorkflows, WorkflowRuns
+from backend.db.session import async_get_session, SqlAsyncSession
+from backend.db.models import User, WorkflowTypes, UserWorkflows, WorkflowRuns, WorkflowSteps, WorkflowArtifacts
 from backend.db.schemas import (
     WorkflowTypeRead, UserWorkflowCreate, UserWorkflowRead, UserWorkflowUpdate,
-    WorkflowRunRead,
+    WorkflowRunRead, WorkflowStepRead, WorkflowArtifactRead,
 )
 from backend.auth.users import current_active_user
 
@@ -132,5 +134,100 @@ async def list_runs(
         .where(WorkflowRuns.workflow_id == workflow_id)
         .order_by(WorkflowRuns.started_at.desc())
         .limit(50)
+    )
+    return result.scalars().all()
+
+
+# ── Trigger a workflow run ───────────────────────────────────
+
+WORKFLOW_RUNNERS = {
+    1: "email_monitor",  # type_id -> runner name
+}
+
+
+async def _run_workflow_background(workflow_id: int):
+    """Run a workflow in the background with its own DB session."""
+    async with SqlAsyncSession() as session:
+        workflow = await session.get(UserWorkflows, workflow_id)
+        if not workflow:
+            return
+
+        if workflow.type_id == 1:
+            from backend.services.workflows.email_monitor import run_email_monitor
+            await run_email_monitor(session, workflow, trigger="manual")
+
+
+@router_workflows.post("/workflows/{workflow_id}/run", response_model=dict)
+async def trigger_run(
+    workflow_id: int,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    workflow = await session.get(UserWorkflows, workflow_id)
+    if not workflow or workflow.group_id != user.group_id:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    if workflow.type_id not in WORKFLOW_RUNNERS:
+        raise HTTPException(status_code=400, detail=f"No runner for workflow type {workflow.type_id}")
+
+    # Run in background so the API returns immediately
+    background_tasks.add_task(_run_workflow_background, workflow_id)
+
+    return {"detail": f"Workflow run triggered for '{workflow.name}'", "workflow_id": workflow_id}
+
+
+# ── Run details (steps + artifacts) ─────────────────────────
+
+
+@router_workflows.get("/runs/{run_id}", response_model=WorkflowRunRead)
+async def get_run(
+    run_id: int,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    run = await session.get(WorkflowRuns, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    workflow = await session.get(UserWorkflows, run.workflow_id)
+    if not workflow or workflow.group_id != user.group_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@router_workflows.get("/runs/{run_id}/steps", response_model=list[WorkflowStepRead])
+async def get_run_steps(
+    run_id: int,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    run = await session.get(WorkflowRuns, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    workflow = await session.get(UserWorkflows, run.workflow_id)
+    if not workflow or workflow.group_id != user.group_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    result = await session.execute(
+        select(WorkflowSteps).where(WorkflowSteps.run_id == run_id).order_by(WorkflowSteps.step_number)
+    )
+    return result.scalars().all()
+
+
+@router_workflows.get("/runs/{run_id}/artifacts", response_model=list[WorkflowArtifactRead])
+async def get_run_artifacts(
+    run_id: int,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    run = await session.get(WorkflowRuns, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    workflow = await session.get(UserWorkflows, run.workflow_id)
+    if not workflow or workflow.group_id != user.group_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    result = await session.execute(
+        select(WorkflowArtifacts).where(WorkflowArtifacts.run_id == run_id).order_by(WorkflowArtifacts.created_at)
     )
     return result.scalars().all()
