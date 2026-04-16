@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Container, Table, Badge, Button, Modal, Form, Row, Col } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
+import { useAuthStore } from "../stores/useAuthStore";
 
 interface ManagedUser {
   user_id: number;
@@ -31,6 +32,7 @@ const emptyCreate = {
 };
 
 export default function ManageUsers() {
+  const auth = useAuthStore();
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -46,6 +48,7 @@ export default function ManageUsers() {
     group_id: 2,
     is_manager: false,
     is_groupadmin: false,
+    is_superuser: false,
   });
 
   const fetchUsers = () => {
@@ -81,6 +84,7 @@ export default function ManageUsers() {
       group_id: u.group_id,
       is_manager: u.is_manager,
       is_groupadmin: u.is_groupadmin,
+      is_superuser: u.is_superuser,
     });
     setShowEdit(true);
   };
@@ -95,6 +99,7 @@ export default function ManageUsers() {
         group_id: editForm.group_id,
         is_manager: editForm.is_manager,
         is_groupadmin: editForm.is_groupadmin,
+        is_superuser: editForm.is_superuser,
       };
       if (editForm.password) {
         payload.password = editForm.password;
@@ -313,6 +318,12 @@ export default function ManageUsers() {
                 <Form.Check type="switch" label="Group Admin" className="mt-2"
                   checked={editForm.is_groupadmin} onChange={(e) => setEditForm({ ...editForm, is_groupadmin: e.target.checked })} />
               </Col>
+              {auth.is_superuser && (
+                <Col md={4}>
+                  <Form.Check type="switch" label="Superuser" className="mt-2 text-danger"
+                    checked={editForm.is_superuser} onChange={(e) => setEditForm({ ...editForm, is_superuser: e.target.checked })} />
+                </Col>
+              )}
             </Row>
           </Modal.Body>
           <Modal.Footer>
