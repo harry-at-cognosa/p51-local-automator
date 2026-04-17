@@ -44,8 +44,14 @@ cd p51-local-automator
 # Database
 createdb p51_automator
 
-# Backend
+# Python virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Backend dependencies
 pip install -r backend/requirements.txt
+
+# Environment config
 cp .env.example .env
 # Edit .env — set ANTHROPIC_API_KEY
 
@@ -58,7 +64,8 @@ npm install
 npm run build
 cd ..
 
-# Run
+# Run (always activate venv first)
+source venv/bin/activate
 python3 -m uvicorn backend.main:app --port 8000
 # Browse to http://localhost:8000/app
 # Login: admin / admin
