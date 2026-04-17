@@ -21,6 +21,9 @@ PyYAML>=6.0.0
 # LLM
 anthropic>=0.40.0
 
+# MCP client
+mcp>=1.0.0
+
 # Scheduling
 apscheduler>=3.10.0,<4
 
