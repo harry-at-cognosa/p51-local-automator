@@ -57,3 +57,13 @@ async def serve_spa(full_path: str):
     if os.path.isfile(_index_path):
         return FileResponse(_index_path)
     return {"detail": "Frontend not built. Run: cd frontend && npm run build"}
+
+
+# Top-level SPA routes (client-side routed by React Router). Without these,
+# a direct visit to /login or /logout would 404 before the bundle loads.
+@app.get("/login", include_in_schema=False)
+@app.get("/logout", include_in_schema=False)
+async def serve_spa_top_level():
+    if os.path.isfile(_index_path):
+        return FileResponse(_index_path)
+    return {"detail": "Frontend not built. Run: cd frontend && npm run build"}
