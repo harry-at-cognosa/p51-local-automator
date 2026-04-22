@@ -244,6 +244,38 @@ class WorkflowArtifactRead(BaseModel):
         from_attributes = True
 
 
+# ── Email auto-reply ─────────────────────────────────────────
+
+
+class PendingEmailReplyRead(BaseModel):
+    pending_id: int
+    workflow_id: int
+    run_id: int
+    source_message_id: str
+    source_account: str
+    source_mailbox: str
+    source_from: str
+    source_subject: str
+    to_address: str
+    subject: str
+    body_draft: str
+    status: str
+    user_action: str | None
+    final_body: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+    class Config:
+        from_attributes = True
+
+
+class PendingEmailReplyActionRequest(BaseModel):
+    """Payload for approve / edit-and-send / save-draft / reject actions.
+    `final_body` optional — use when the user edited the reply before acting.
+    """
+    final_body: str | None = None
+
+
 # ── Dashboard schemas ────────────────────────────────────────
 
 

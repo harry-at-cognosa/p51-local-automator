@@ -8,6 +8,8 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.session import async_get_session, SqlAsyncSession
 from backend.db.models import (
+    EmailAutoReplyLog,
+    PendingEmailReplies,
     User,
     WorkflowCategories,
     WorkflowTypes,
@@ -24,11 +26,14 @@ from backend.db.schemas import (
     UserWorkflowListRead,
     UserWorkflowUpdate,
     BulkDeleteRequest,
+    PendingEmailReplyRead,
+    PendingEmailReplyActionRequest,
     WorkflowRunRead,
     WorkflowStepRead,
     WorkflowArtifactRead,
 )
 from backend.auth.users import current_active_user
+from backend.services import mcp_client
 
 router_workflows = APIRouter()
 
@@ -310,6 +315,8 @@ WORKFLOW_RUNNERS = {
     2: "data_analyzer",
     3: "calendar_digest",
     4: "sql_runner",
+    5: "email_auto_reply_draft",
+    6: "email_auto_reply_approve",
 }
 
 
@@ -332,6 +339,12 @@ async def _run_workflow_background(workflow_id: int):
         elif workflow.type_id == 4:
             from backend.services.workflows.sql_runner import run_sql_runner
             await run_sql_runner(session, workflow, trigger="manual")
+        elif workflow.type_id == 5:
+            from backend.services.workflows.email_auto_reply_draft import run_email_auto_reply_draft
+            await run_email_auto_reply_draft(session, workflow, trigger="manual")
+        elif workflow.type_id == 6:
+            from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
+            await run_email_auto_reply_approve(session, workflow, trigger="manual")
 
 
 @router_workflows.post("/workflows/{workflow_id}/run", response_model=dict)
@@ -422,3 +435,147 @@ async def get_run_artifacts(
             )
         )
     return rows
+
+
+# ── Email auto-reply approval queue (Variant B) ──────────────
+
+
+async def _get_pending_reply(
+    session: AsyncSession, pending_id: int, user: User
+) -> PendingEmailReplies:
+    """Fetch a pending reply, enforcing group ownership via the parent workflow."""
+    pending = await session.get(PendingEmailReplies, pending_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Pending reply not found")
+    workflow = await session.get(UserWorkflows, pending.workflow_id)
+    if (
+        not workflow
+        or workflow.group_id != user.group_id
+        or workflow.deleted != 0
+    ):
+        raise HTTPException(status_code=404, detail="Pending reply not found")
+    return pending
+
+
+@router_workflows.get(
+    "/workflows/{workflow_id}/pending-replies",
+    response_model=list[PendingEmailReplyRead],
+)
+async def list_pending_replies(
+    workflow_id: int,
+    status: str | None = None,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """List pending replies for a workflow. Defaults to status='pending' only."""
+    await _get_active_workflow(session, workflow_id, user)
+
+    query = (
+        select(PendingEmailReplies)
+        .where(PendingEmailReplies.workflow_id == workflow_id)
+        .order_by(PendingEmailReplies.created_at.desc())
+    )
+    if status:
+        query = query.where(PendingEmailReplies.status == status)
+    else:
+        query = query.where(PendingEmailReplies.status == "pending")
+
+    result = await session.execute(query)
+    return result.scalars().all()
+
+
+async def _update_log_action(
+    session: AsyncSession, pending_id: int, action: str
+) -> None:
+    """Flip the dedup log's action for this pending_id to the terminal state."""
+    result = await session.execute(
+        select(EmailAutoReplyLog).where(EmailAutoReplyLog.pending_id == pending_id)
+    )
+    log_row = result.scalar_one_or_none()
+    if log_row is not None:
+        log_row.action = action
+
+
+def _resolve(pending: PendingEmailReplies, status: str, action: str, final_body: str | None) -> None:
+    from datetime import datetime, timezone
+    pending.status = status
+    pending.user_action = action
+    pending.final_body = final_body
+    pending.resolved_at = datetime.now(timezone.utc)
+
+
+@router_workflows.post("/pending-replies/{pending_id}/approve")
+async def approve_pending_reply(
+    pending_id: int,
+    body: PendingEmailReplyActionRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """Send the reply as-drafted (or the user's lightly-edited body if provided)."""
+    pending = await _get_pending_reply(session, pending_id, user)
+    if pending.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
+
+    outgoing_body = (body.final_body or pending.body_draft)
+    try:
+        await mcp_client.mail_send_email(
+            to=pending.to_address,
+            subject=pending.subject,
+            body=outgoing_body,
+            from_account=pending.source_account,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Mail send failed: {str(e)[:200]}")
+
+    action = "edited_and_sent" if body.final_body else "approved_sent"
+    _resolve(pending, action, action, body.final_body)
+    await _update_log_action(session, pending_id, action)
+    await session.commit()
+    return {"detail": "sent", "pending_id": pending_id, "status": action}
+
+
+@router_workflows.post("/pending-replies/{pending_id}/save-draft")
+async def save_pending_reply_as_draft(
+    pending_id: int,
+    body: PendingEmailReplyActionRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """Save the (possibly edited) reply to the account's Drafts folder."""
+    pending = await _get_pending_reply(session, pending_id, user)
+    if pending.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
+
+    outgoing_body = (body.final_body or pending.body_draft)
+    try:
+        await mcp_client.mail_save_draft(
+            to=pending.to_address,
+            subject=pending.subject,
+            body=outgoing_body,
+            from_account=pending.source_account,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Draft save failed: {str(e)[:200]}")
+
+    _resolve(pending, "saved_as_draft", "saved_as_draft", body.final_body)
+    await _update_log_action(session, pending_id, "saved_as_draft")
+    await session.commit()
+    return {"detail": "saved_as_draft", "pending_id": pending_id}
+
+
+@router_workflows.post("/pending-replies/{pending_id}/reject")
+async def reject_pending_reply(
+    pending_id: int,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """Reject: no email is sent or saved. Source message stays in the dedup log
+    so it won't be re-queued on the next scheduled scan."""
+    pending = await _get_pending_reply(session, pending_id, user)
+    if pending.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
+
+    _resolve(pending, "rejected", "rejected", None)
+    await _update_log_action(session, pending_id, "rejected")
+    await session.commit()
+    return {"detail": "rejected", "pending_id": pending_id}

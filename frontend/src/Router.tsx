@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import Workflows from "./pages/Workflows";
 import WorkflowDetail from "./pages/WorkflowDetail";
 import RunDetail from "./pages/RunDetail";
+import PendingReplies from "./pages/PendingReplies";
 import ManageUsers from "./pages/ManageUsers";
 import ManageGroups from "./pages/ManageGroups";
 import Settings from "./pages/Settings";
@@ -27,6 +28,10 @@ export const Router = createBrowserRouter([
       {
         path: "workflows/:id",
         element: <WorkflowDetail />,
+      },
+      {
+        path: "workflows/:id/pending-replies",
+        element: <PendingReplies />,
       },
       {
         path: "runs/:runId",

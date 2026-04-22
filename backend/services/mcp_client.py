@@ -2,8 +2,12 @@
 
 Each MCP server runs as a subprocess via stdio transport. This module manages
 connections and provides typed helpers for common operations.
+
+Apple Mail MCP notably does NOT expose a draft-creation tool; for drafts we
+shell out to AppleScript directly via `osascript` (see mail_save_draft).
 """
 import asyncio
+import subprocess
 from contextlib import asynccontextmanager
 
 from mcp import ClientSession
@@ -100,6 +104,74 @@ async def mail_search_messages(query: str, account: str = None, mailbox: str = N
         args["mailbox"] = mailbox
     content = await call_tool("apple-mail", "search_messages", args)
     return json.loads(content[0].text) if content else []
+
+
+async def mail_send_email(to: str, subject: str, body: str, from_account: str | None = None) -> dict:
+    """Send an email via Apple Mail MCP send_email tool.
+
+    `from_account` must be an account name configured in Mail.app (e.g. 'iCloud',
+    'harry@cognosa.net'). If omitted, Mail.app's default sending account is used.
+    """
+    import json
+    args: dict = {"to": to, "subject": subject, "body": body}
+    if from_account:
+        args["from_account"] = from_account
+    content = await call_tool("apple-mail", "send_email", args)
+    if not content:
+        return {"ok": True}
+    try:
+        return json.loads(content[0].text)
+    except (AttributeError, ValueError, IndexError):
+        return {"ok": True, "raw": str(content[0]) if content else ""}
+
+
+def _applescript_escape(s: str) -> str:
+    """Escape a string for interpolation into an AppleScript string literal.
+
+    AppleScript strings are double-quoted; backslashes and double-quotes need
+    escaping, and newlines must become literal `\n` so the script compiles.
+    """
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+
+
+async def mail_save_draft(to: str, subject: str, body: str, from_account: str | None = None) -> dict:
+    """Create an outgoing message in Mail.app and save it to that account's Drafts.
+
+    Uses AppleScript (osascript) since the MCP server has no draft tool. The
+    `save` AppleScript command on an outgoing message routes it to the account's
+    Drafts folder. Mail.app must be running (AppleScript will launch it).
+
+    from_account must match a sender address configured in Mail.app, e.g.
+    'Harry <harry@cognosa.net>' or just the email — we let Mail.app match.
+    """
+    sender_line = ""
+    if from_account:
+        sender_line = f'\n    set sender of newMessage to "{_applescript_escape(from_account)}"'
+
+    script = f'''
+tell application "Mail"
+    set newMessage to make new outgoing message with properties {{subject:"{_applescript_escape(subject)}", content:"{_applescript_escape(body)}", visible:false}}
+    tell newMessage
+        make new to recipient at end of to recipients with properties {{address:"{_applescript_escape(to)}"}}
+    end tell{sender_line}
+    save newMessage
+    return "saved"
+end tell
+'''.strip()
+
+    # Run osascript in a thread so we don't block the event loop.
+    def _run():
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+    result = await asyncio.to_thread(_run)
+    if result.returncode != 0:
+        raise RuntimeError(f"mail_save_draft failed: {result.stderr.strip()[:500]}")
+    return {"ok": True, "output": result.stdout.strip()}
 
 
 # ── Apple Calendar helpers ───────────────────────────────────

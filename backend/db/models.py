@@ -268,3 +268,64 @@ class ConversationMessages(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     conversation: Mapped["Conversations"] = relationship("Conversations", back_populates="messages")
+
+
+class PendingEmailReplies(Base):
+    """Variant-B approval queue: per-message pending reply state."""
+    __tablename__ = "pending_email_replies"
+
+    pending_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user_workflows.workflow_id", name="fk_pending_replies_workflow_id"),
+        nullable=False,
+    )
+    run_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("workflow_runs.run_id", name="fk_pending_replies_run_id"),
+        nullable=False,
+    )
+    source_message_id: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    source_account: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    source_mailbox: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    source_from: Mapped[str] = mapped_column(VARCHAR, nullable=False)
+    source_subject: Mapped[str] = mapped_column(VARCHAR, nullable=False)
+    to_address: Mapped[str] = mapped_column(VARCHAR, nullable=False)
+    subject: Mapped[str] = mapped_column(VARCHAR, nullable=False)
+    body_draft: Mapped[str] = mapped_column(Text, nullable=False)
+    # pending | approved_sent | edited_and_sent | saved_as_draft | rejected
+    status: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default=text("'pending'"))
+    user_action: Mapped[str | None] = mapped_column(VARCHAR(32), nullable=True)
+    final_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EmailAutoReplyLog(Base):
+    """Dedup ledger so scheduled runs don't acknowledge the same message twice.
+
+    Unique on (workflow_id, source_message_id). `action` is one of:
+    'draft_saved', 'sent_direct', 'queued_for_approval', plus terminal states
+    (updated after user resolves a queued reply).
+    """
+    __tablename__ = "email_auto_reply_log"
+
+    log_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user_workflows.workflow_id", name="fk_auto_reply_log_workflow_id"),
+        nullable=False,
+    )
+    source_message_id: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    source_account: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    action: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    pending_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("pending_email_replies.pending_id", name="fk_auto_reply_log_pending_id"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "source_message_id", name="uq_auto_reply_log_workflow_msg"),
+    )

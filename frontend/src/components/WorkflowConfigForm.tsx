@@ -261,6 +261,97 @@ export default function WorkflowConfigForm({ typeId, config, onChange }: Props) 
     );
   }
 
+  // Auto-Reply (Draft Only) = type 5, Auto-Reply (Approve Before Send) = type 6
+  // Same config shape for both.
+  if (typeId === 5 || typeId === 6) {
+    return (
+      <Row className="g-3">
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Mail Account</Form.Label>
+            <Form.Select
+              value={(config.account as string) || "iCloud"}
+              onChange={(e) => set("account", e.target.value)}
+            >
+              {MAIL_ACCOUNTS.map((a) => (
+                <option key={a.value} value={a.value}>{a.label}</option>
+              ))}
+            </Form.Select>
+            <Form.Text className="text-muted">Drafts/sends use this account</Form.Text>
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Mailbox</Form.Label>
+            <Form.Control
+              value={(config.mailbox as string) || "INBOX"}
+              onChange={(e) => set("mailbox", e.target.value)}
+            />
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Sender filter (substring, case-insensitive)</Form.Label>
+            <Form.Control
+              placeholder="e.g. form-submission@squarespace.info"
+              value={(config.sender_filter as string) || ""}
+              onChange={(e) => set("sender_filter", e.target.value)}
+            />
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Fetch limit</Form.Label>
+            <Form.Control
+              type="number"
+              min={1}
+              max={200}
+              value={(config.fetch_limit as number) || 50}
+              onChange={(e) => set("fetch_limit", parseInt(e.target.value, 10) || 50)}
+            />
+            <Form.Text className="text-muted">Max recent messages to scan per run</Form.Text>
+          </Form.Group>
+        </Col>
+        <Col md={12}>
+          <Form.Group>
+            <Form.Label>Body contains (substring, case-insensitive)</Form.Label>
+            <Form.Control
+              placeholder="e.g. Sent via form submission from CogWrite Semantic Technologies"
+              value={(config.body_contains as string) || ""}
+              onChange={(e) => set("body_contains", e.target.value)}
+            />
+            <Form.Text className="text-muted">
+              At least one filter (sender or body) is required — empty-filter runs are skipped to avoid unintended replies.
+            </Form.Text>
+          </Form.Group>
+        </Col>
+        <Col md={12}>
+          <Form.Group>
+            <Form.Label>Reply tone</Form.Label>
+            <Form.Control
+              placeholder="e.g. warm and professional"
+              value={(config.tone as string) || "warm and professional"}
+              onChange={(e) => set("tone", e.target.value)}
+            />
+          </Form.Group>
+        </Col>
+        <Col md={12}>
+          <Form.Group>
+            <Form.Label>Signature (appended to every reply)</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={3}
+              placeholder={"Harry Layman\nCognosa"}
+              value={(config.signature as string) || ""}
+              onChange={(e) => set("signature", e.target.value)}
+              style={{ fontFamily: "monospace", fontSize: "0.9em" }}
+            />
+          </Form.Group>
+        </Col>
+      </Row>
+    );
+  }
+
   // Fallback: raw JSON
   return (
     <Form.Group>

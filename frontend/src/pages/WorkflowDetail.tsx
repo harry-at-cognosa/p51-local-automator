@@ -137,6 +137,15 @@ export default function WorkflowDetail() {
           </p>
         </div>
         <div className="d-flex gap-2">
+          {workflow.type_id === 6 && (
+            <Button
+              variant="outline-warning"
+              onClick={() => navigate(`/app/workflows/${id}/pending-replies`)}
+              title="Review auto-generated replies awaiting your approval"
+            >
+              Pending replies
+            </Button>
+          )}
           <Button
             variant="success"
             onClick={triggerRun}

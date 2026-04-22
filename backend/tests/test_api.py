@@ -149,10 +149,13 @@ class TestWorkflows:
         r = httpx.get(f"{BASE}/workflow-types", headers=admin_headers)
         assert r.status_code == 200
         types = r.json()
-        assert len(types) == 4
+        # 4 original + 2 auto-reply variants
+        assert len(types) == 6
         names = [t["type_name"] for t in types]
         assert "Email Topic Monitor" in names
         assert "Calendar Digest" in names
+        assert "Auto-Reply (Draft Only)" in names
+        assert "Auto-Reply (Approve Before Send)" in names
         # Types now nest their category
         for t in types:
             assert "category" in t

@@ -116,3 +116,54 @@ Return ONLY the JSON array, no other text."""
     user_prompt = f"Categorize these {len(emails)} emails:\n\n" + "\n".join(email_lines)
 
     return judge_structured(system, user_prompt)
+
+
+def generate_email_reply(
+    source_from: str,
+    source_subject: str,
+    source_body: str,
+    signature: str = "",
+    tone: str = "warm and professional",
+) -> dict:
+    """Generate a short acknowledgment reply for an inbound form submission.
+
+    Returns a dict with "result" = {"subject": str, "body": str} and "usage" token counts.
+    Subject will typically be "Re: <original subject>" unless the LLM has a better idea.
+    """
+    sig_block = ""
+    if signature:
+        sig_block = f"\n\nSignature to append at the end of the reply (use verbatim):\n---\n{signature}\n---"
+
+    system = (
+        "You write short, genuine acknowledgment replies to inbound form-submission emails. "
+        "Your goal: confirm receipt, reassure the sender their message was seen by a human, "
+        "set a reasonable expectation for follow-up, and stay brief.\n\n"
+        "Hard rules:\n"
+        "- 2–4 sentences, no more.\n"
+        "- Never promise a specific time commitment you can't keep; use phrases like 'soon' or 'within a few days'.\n"
+        "- Don't invent facts not in the source message (no made-up meetings, dates, or names).\n"
+        "- If the sender's name is visible in the message, address them by first name.\n"
+        "- Do NOT include a signature — a separate signature block is appended.\n"
+        "- Tone: " + tone + ".\n\n"
+        "Return ONLY a JSON object, no prose before or after:\n"
+        "{\"subject\": \"Re: <original subject>\", \"body\": \"<reply text>\"}"
+    )
+
+    user_prompt = (
+        f"Inbound email:\n"
+        f"From: {source_from}\n"
+        f"Subject: {source_subject}\n"
+        f"Body:\n{source_body[:4000]}"
+        f"{sig_block}"
+    )
+
+    result = judge_structured(system, user_prompt)
+
+    # If a signature was provided, append it to the body the LLM returned so
+    # the model can't accidentally omit it.
+    if signature and isinstance(result.get("result"), dict):
+        body = result["result"].get("body", "")
+        if signature.strip() and signature.strip() not in body:
+            result["result"]["body"] = f"{body.rstrip()}\n\n{signature.rstrip()}\n"
+
+    return result
