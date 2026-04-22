@@ -13,3 +13,15 @@ data/
 .mypy_cache/
 *.xlsx
 *.csv
+
+# macOS / network share artifacts
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.AppleDouble
+.LSOverride
+.apdisk
+20000
