@@ -1,0 +1,35 @@
+email to reply to with ack
+
+has:
+
+from:	Squarespace <form-submission@squarespace.info>
+reply-to:	HarryLaymanPhD@gmail.com
+to:	harry@cognosa.net
+date:	Apr 22, 2026, 11:43 AM
+subject:	Form Submission - New Form 2 3
+mailed-by:	em5969.squarespace.info
+signed-by:	squarespace.info
+security:	 Standard encryption (TLS) Learn more
+:	Important according to Google magic.
+
+
+== 
+
+texit includes:
+
+Squarespace <form-submission@squarespace.info>
+11:43 AM (0 minutes ago)
+to me
+
+Sent via form submission from CogWrite Semantic Technologies
+
+Name: harry layman
+
+Email: HarryLaymanPhD@gmail.com
+
+Message: this one should go to cognosa!!
+
+Manage Submissions
+
+Does this submission look like spam? Report it here.
+

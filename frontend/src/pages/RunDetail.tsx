@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Container, Card, Badge, Table, Button, Spinner, Alert } from "react-bootstrap";
+import StatusBadge from "../components/StatusBadge";
 import axiosClient from "../api/axiosClient";
 
 interface WorkflowRun {
@@ -37,6 +38,7 @@ interface WorkflowArtifact {
   file_size: number;
   description: string;
   created_at: string;
+  file_exists: boolean;
 }
 
 export default function RunDetail() {
@@ -53,16 +55,6 @@ export default function RunDetail() {
     axiosClient.get(`/runs/${runId}/steps`).then((res) => setSteps(res.data)).catch(() => {});
     axiosClient.get(`/runs/${runId}/artifacts`).then((res) => setArtifacts(res.data)).catch(() => {});
   }, [runId]);
-
-  const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      completed: "success",
-      running: "primary",
-      failed: "danger",
-      pending: "secondary",
-    };
-    return <Badge bg={colors[status] || "secondary"}>{status}</Badge>;
-  };
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -98,7 +90,7 @@ export default function RunDetail() {
 
       <div className="d-flex justify-content-between align-items-start mb-4">
         <div>
-          <h3>Run #{run.run_id} {statusBadge(run.status)}</h3>
+          <h3>Run #{run.run_id} <StatusBadge status={run.status} /></h3>
           <p className="text-muted mb-0">
             {new Date(run.started_at).toLocaleString()}
             {duration !== null && <> &middot; {duration}s</>}
@@ -135,7 +127,7 @@ export default function RunDetail() {
                   <tr key={s.step_id}>
                     <td>{s.step_number}</td>
                     <td className="fw-bold">{s.step_name}</td>
-                    <td>{statusBadge(s.status)}</td>
+                    <td><StatusBadge status={s.status} /></td>
                     <td>{stepDuration !== null ? `${stepDuration}s` : "-"}</td>
                     <td>{s.llm_tokens_used > 0 ? s.llm_tokens_used.toLocaleString() : "-"}</td>
                     <td>
@@ -165,17 +157,26 @@ export default function RunDetail() {
               </thead>
               <tbody>
                 {artifacts.map((a) => (
-                  <tr key={a.artifact_id}>
+                  <tr key={a.artifact_id} className={!a.file_exists ? "text-muted" : ""}>
                     <td>
                       <Badge bg="light" text="dark" className="font-monospace">{fileIcon(a.file_type)}</Badge>
                     </td>
-                    <td>{a.description}</td>
+                    <td>
+                      {a.description}
+                      {!a.file_exists && (
+                        <Badge bg="warning" text="dark" className="ms-2" title={`Missing on disk: ${a.file_path}`}>
+                          missing on disk
+                        </Badge>
+                      )}
+                    </td>
                     <td>{formatSize(a.file_size)}</td>
                     <td className="text-muted small font-monospace">{a.file_path.split("/").pop()}</td>
                     <td>
                       <Button
                         size="sm"
                         variant="outline-primary"
+                        disabled={!a.file_exists}
+                        title={!a.file_exists ? "File no longer exists on disk" : undefined}
                         onClick={() => {
                           const token = localStorage.getItem("token");
                           window.open(`/api/v1/artifacts/${a.artifact_id}/download?token=${token}`, "_blank");

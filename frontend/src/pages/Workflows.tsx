@@ -1,68 +1,109 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Container, Table, Badge, Button, Modal, Form, Row, Col } from "react-bootstrap";
+import { Container, Table, Button, Modal, Form, Row, Col, Alert } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
+import StatusBadge from "../components/StatusBadge";
+import TableVCRPager from "../components/TableVCRPager";
+import { useWorkflowsStore } from "../stores/workflowsStore";
 
-interface WorkflowType {
-  type_id: number;
-  type_name: string;
-  type_desc: string;
-  type_category: string;
-  default_config: Record<string, unknown>;
-  enabled: boolean;
-}
-
-interface UserWorkflow {
-  workflow_id: number;
-  type_id: number;
-  name: string;
-  config: Record<string, unknown>;
-  enabled: boolean;
-  last_run_at: string | null;
-  created_at: string;
-}
+const STATUS_OPTIONS = ["completed", "running", "failed", "pending"];
+const STATUS_NONE = "__none__";
 
 export default function Workflows() {
-  const [types, setTypes] = useState<WorkflowType[]>([]);
-  const [workflows, setWorkflows] = useState<UserWorkflow[]>([]);
+  const navigate = useNavigate();
+  const {
+    items,
+    categories,
+    types,
+    filters,
+    page,
+    pageSize,
+    selectedIds,
+    loading,
+    error,
+    fetchAll,
+    setFilter,
+    setPage,
+    setPageSize,
+    toggleSelected,
+    selectMany,
+    clearSelection,
+    bulkDelete,
+  } = useWorkflowsStore();
+
   const [showCreate, setShowCreate] = useState(false);
   const [selectedTypeId, setSelectedTypeId] = useState<number>(0);
   const [newName, setNewName] = useState("");
   const [newConfig, setNewConfig] = useState<Record<string, unknown>>({});
-  const navigate = useNavigate();
 
-  const fetchData = () => {
-    axiosClient.get("/workflow-types").then((res) => setTypes(res.data));
-    axiosClient.get("/workflows").then((res) => setWorkflows(res.data));
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Filtered, sorted dataset (client-side)
+  const filtered = useMemo(() => {
+    const nameQ = filters.name.trim().toLowerCase();
+    return items.filter((w) => {
+      if (filters.category && w.type.category.category_key !== filters.category) return false;
+      if (filters.type && String(w.type_id) !== filters.type) return false;
+      if (filters.status) {
+        if (filters.status === STATUS_NONE) {
+          if (w.latest_run_status) return false;
+        } else if (w.latest_run_status !== filters.status) {
+          return false;
+        }
+      }
+      if (nameQ && !w.name.toLowerCase().includes(nameQ)) return false;
+      return true;
+    });
+  }, [items, filters]);
+
+  const totalRows = filtered.length;
+  const pageStart = (page - 1) * pageSize;
+  const pageItems = useMemo(
+    () => filtered.slice(pageStart, pageStart + pageSize),
+    [filtered, pageStart, pageSize]
+  );
+
+  // Clamp page if filter reduced it below current
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalRows / pageSize));
+    if (page > maxPage) setPage(maxPage);
+  }, [totalRows, pageSize, page, setPage]);
+
+  // Types filtered by chosen category (dropdown sub-filter)
+  const typesForFilter = useMemo(() => {
+    if (!filters.category) return types;
+    return types.filter((t) => t.category.category_key === filters.category);
+  }, [types, filters.category]);
+
+  const handleSelectAllOnPage = () => {
+    selectMany(pageItems.map((w) => w.workflow_id));
   };
 
-  useEffect(() => { fetchData(); }, []);
-
-  const categoryBadge = (cat: string) => {
-    const colors: Record<string, string> = {
-      email: "primary",
-      data: "success",
-      calendar: "info",
-    };
-    return <Badge bg={colors[cat] || "secondary"}>{cat}</Badge>;
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `Delete ${ids.length} selected workflow${ids.length === 1 ? "" : "s"}? This is a soft delete — rows are hidden but can be recovered from the database.`
+    );
+    if (!ok) return;
+    await bulkDelete(ids);
   };
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     const wfType = types.find((t) => t.type_id === selectedTypeId);
     if (!wfType) return;
-
     await axiosClient.post("/workflows", {
       type_id: selectedTypeId,
-      name: newName || wfType.type_name,
+      name: newName || wfType.long_name,
       config: newConfig,
     });
     setShowCreate(false);
     setNewName("");
     setSelectedTypeId(0);
     setNewConfig({});
-    fetchData();
+    await fetchAll();
   };
 
   return (
@@ -74,41 +115,152 @@ export default function Workflows() {
         </Button>
       </div>
 
-      {workflows.length === 0 ? (
+      {error && <Alert variant="danger">{error}</Alert>}
+
+      {loading && items.length === 0 ? (
+        <p className="text-muted">Loading…</p>
+      ) : items.length === 0 ? (
         <p className="text-muted">No workflows configured yet. Click "+ New Workflow" to get started.</p>
       ) : (
-        <Table striped bordered hover>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Enabled</th>
-              <th>Last Run</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {workflows.map((w) => (
-              <tr key={w.workflow_id}>
-                <td className="fw-bold">{w.name}</td>
-                <td>{categoryBadge(types.find((t) => t.type_id === w.type_id)?.type_category || "")} {types.find((t) => t.type_id === w.type_id)?.type_name || w.type_id}</td>
-                <td>
-                  <Badge bg={w.enabled ? "success" : "secondary"}>
-                    {w.enabled ? "Yes" : "No"}
-                  </Badge>
-                </td>
-                <td>{w.last_run_at ? new Date(w.last_run_at).toLocaleString() : "Never"}</td>
-                <td>{new Date(w.created_at).toLocaleDateString()}</td>
-                <td>
-                  <Button size="sm" variant="outline-primary" onClick={() => navigate(`/app/workflows/${w.workflow_id}`)}>
-                    Open
-                  </Button>
-                </td>
+        <>
+          <TableVCRPager
+            page={page}
+            totalRows={totalRows}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSizeCommit={setPageSize}
+            selectedCount={selectedIds.size}
+            onSelectAllOnPage={handleSelectAllOnPage}
+            onBulkDelete={handleBulkDelete}
+          />
+
+          <Table striped bordered hover size="sm" className="mt-2">
+            <thead>
+              <tr>
+                <th style={{ width: 36 }}></th>
+                <th>Category</th>
+                <th>Type</th>
+                <th>Name <span className="text-muted fw-normal small">(click to review)</span></th>
+                <th>Status</th>
+                <th>Last Run</th>
               </tr>
-            ))}
-          </tbody>
-        </Table>
+              <tr className="table-light">
+                <th></th>
+                <th>
+                  <Form.Select
+                    size="sm"
+                    value={filters.category}
+                    onChange={(e) => {
+                      setFilter("category", e.target.value);
+                      // Reset type filter if it no longer belongs to the chosen category
+                      if (e.target.value && filters.type) {
+                        const stillValid = types.some(
+                          (t) => String(t.type_id) === filters.type && t.category.category_key === e.target.value
+                        );
+                        if (!stillValid) setFilter("type", "");
+                      }
+                    }}
+                  >
+                    <option value="">(any)</option>
+                    {categories.map((c) => (
+                      <option key={c.category_id} value={c.category_key} title={c.long_name}>
+                        {c.short_name}
+                      </option>
+                    ))}
+                  </Form.Select>
+                </th>
+                <th>
+                  <Form.Select
+                    size="sm"
+                    value={filters.type}
+                    onChange={(e) => setFilter("type", e.target.value)}
+                  >
+                    <option value="">(any)</option>
+                    {typesForFilter.map((t) => (
+                      <option key={t.type_id} value={String(t.type_id)} title={t.long_name}>
+                        {t.short_name}
+                      </option>
+                    ))}
+                  </Form.Select>
+                </th>
+                <th>
+                  <Form.Control
+                    size="sm"
+                    type="text"
+                    placeholder="filter name…"
+                    value={filters.name}
+                    onChange={(e) => setFilter("name", e.target.value)}
+                  />
+                </th>
+                <th>
+                  <Form.Select
+                    size="sm"
+                    value={filters.status}
+                    onChange={(e) => setFilter("status", e.target.value)}
+                  >
+                    <option value="">(any)</option>
+                    <option value={STATUS_NONE}>(never run)</option>
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </Form.Select>
+                </th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((w) => {
+                const checked = selectedIds.has(w.workflow_id);
+                return (
+                  <tr key={w.workflow_id}>
+                    <td className="text-center">
+                      <Form.Check
+                        type="checkbox"
+                        aria-label={`Select ${w.name}`}
+                        checked={checked}
+                        onChange={() => toggleSelected(w.workflow_id)}
+                      />
+                    </td>
+                    <td title={w.type.category.long_name}>{w.type.category.short_name}</td>
+                    <td title={`${w.type.long_name}${w.type.type_desc ? " — " + w.type.type_desc : ""}`}>
+                      {w.type.short_name}
+                    </td>
+                    <td
+                      className="fw-semibold"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => navigate(`/app/workflows/${w.workflow_id}`)}
+                    >
+                      {w.name}
+                    </td>
+                    <td>
+                      <StatusBadge status={w.latest_run_status} />
+                      {w.latest_run_status === "completed" && w.latest_run_artifact_count === 0 && (
+                        <span
+                          className="ms-1"
+                          title="Latest run produced no output"
+                          style={{ cursor: "help" }}
+                        >
+                          ⚠️
+                        </span>
+                      )}
+                    </td>
+                    <td>{w.latest_run_at ? new Date(w.latest_run_at).toLocaleString() : "Never"}</td>
+                  </tr>
+                );
+              })}
+              {pageItems.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="text-center text-muted py-3">
+                    No workflows match the current filters.{" "}
+                    <Button variant="link" size="sm" onClick={() => { clearSelection(); useWorkflowsStore.getState().resetFilters(); }}>
+                      Clear filters
+                    </Button>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </Table>
+        </>
       )}
 
       <h4 className="mt-5 mb-3">Available Workflow Types</h4>
@@ -116,8 +268,8 @@ export default function Workflows() {
         {types.map((t) => (
           <Col md={6} lg={3} key={t.type_id}>
             <div className="border rounded p-3 h-100">
-              <div className="mb-2">{categoryBadge(t.type_category)}</div>
-              <h6>{t.type_name}</h6>
+              <div className="mb-2 text-muted small text-uppercase">{t.category.short_name}</div>
+              <h6>{t.long_name}</h6>
               <p className="text-muted small mb-0">{t.type_desc}</p>
             </div>
           </Col>
@@ -144,7 +296,9 @@ export default function Workflows() {
               >
                 <option value={0}>Select a type...</option>
                 {types.map((t) => (
-                  <option key={t.type_id} value={t.type_id}>{t.type_name}</option>
+                  <option key={t.type_id} value={t.type_id}>
+                    {t.category.short_name} — {t.long_name}
+                  </option>
                 ))}
               </Form.Select>
             </Form.Group>

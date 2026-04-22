@@ -1,4 +1,13 @@
-"""Idempotent seed: inserts default data only if tables are empty."""
+"""Idempotent seed.
+
+Groups/admin/settings: insert only if the groups table is empty.
+
+Workflow categories + types: upsert on every startup so that renames in
+this file (short_name, long_name, type_desc, default_config, category)
+propagate to the DB without manual intervention. This overwrites hand-
+edits made directly in the DB to the canonical seeded rows — acceptable
+for this project (local/dev). Add new types here and restart to install.
+"""
 import asyncio
 
 from sqlalchemy import select, func, text
@@ -6,8 +15,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import DEFAULT_ADMIN_PASSWORD
 from backend.db.session import SqlAsyncSession
-from backend.db.models import ApiGroups, ApiSettings, WorkflowTypes, User
+from backend.db.models import (
+    ApiGroups,
+    ApiSettings,
+    User,
+    WorkflowCategories,
+    WorkflowTypes,
+)
 from backend.auth.users import password_helper
+
+
+WORKFLOW_CATEGORY_DEFAULTS = [
+    {"category_key": "email", "short_name": "Email", "long_name": "Email", "sort_order": 10},
+    {"category_key": "calendar", "short_name": "Calendar", "long_name": "Calendar", "sort_order": 20},
+    {"category_key": "analysis", "short_name": "Analysis", "long_name": "Data Set Analysis", "sort_order": 30},
+    {"category_key": "queries", "short_name": "Queries", "long_name": "Structured Queries", "sort_order": 40},
+]
 
 
 WORKFLOW_TYPE_DEFAULTS = [
@@ -15,7 +38,9 @@ WORKFLOW_TYPE_DEFAULTS = [
         "type_id": 1,
         "type_name": "Email Topic Monitor",
         "type_desc": "Fetch emails from Apple Mail or Gmail, categorize by topic with AI, assess urgency, and generate an Excel report.",
-        "type_category": "email",
+        "category_key": "email",
+        "short_name": "Topic Monitor",
+        "long_name": "Email Topic Monitor",
         "default_config": {
             "service": "apple_mail",
             "account": "iCloud",
@@ -30,7 +55,9 @@ WORKFLOW_TYPE_DEFAULTS = [
         "type_id": 2,
         "type_name": "Transaction Data Analyzer",
         "type_desc": "Read transaction data from CSV/Excel, profile and filter by date, generate summary report with charts and outlier detection.",
-        "type_category": "data",
+        "category_key": "analysis",
+        "short_name": "Transactions",
+        "long_name": "Transaction Data Analyzer",
         "default_config": {
             "date_range": "last 30 days",
             "key_fields": [],
@@ -42,7 +69,9 @@ WORKFLOW_TYPE_DEFAULTS = [
         "type_id": 3,
         "type_name": "Calendar Digest",
         "type_desc": "Extract calendar events, detect conflicts, assess importance, and produce a formatted digest with optional Excel report.",
-        "type_category": "calendar",
+        "category_key": "calendar",
+        "short_name": "Digest",
+        "long_name": "Calendar Digest",
         "default_config": {
             "service": "apple_calendar",
             "calendars": ["Work", "Family"],
@@ -54,7 +83,9 @@ WORKFLOW_TYPE_DEFAULTS = [
         "type_id": 4,
         "type_name": "SQL Query Runner",
         "type_desc": "Execute read-only SQL queries against configured databases, analyze results with AI, and generate charts and narrative.",
-        "type_category": "data",
+        "category_key": "queries",
+        "short_name": "SQL Runner",
+        "long_name": "SQL Query Runner",
         "default_config": {
             "database": "",
             "query": "",
@@ -112,24 +143,77 @@ async def _seed(session: AsyncSession):
     print("[seed] Default data seeded successfully.")
 
 
-async def _seed_workflow_types(session: AsyncSession):
-    count = await session.scalar(select(func.count()).select_from(WorkflowTypes))
-    if count and count > 0:
-        print(f"[seed] Workflow types already exist ({count} records), skipping.")
-        return
-
-    print(f"[seed] Seeding {len(WORKFLOW_TYPE_DEFAULTS)} workflow types...")
-    for wf_data in WORKFLOW_TYPE_DEFAULTS:
-        session.add(WorkflowTypes(**wf_data))
+async def _seed_workflow_categories(session: AsyncSession) -> dict[str, int]:
+    """Upsert by category_key. Returns {category_key: category_id}."""
+    print(f"[seed] Upserting {len(WORKFLOW_CATEGORY_DEFAULTS)} workflow categories...")
+    key_to_id: dict[str, int] = {}
+    for cat_data in WORKFLOW_CATEGORY_DEFAULTS:
+        existing = await session.scalar(
+            select(WorkflowCategories).where(WorkflowCategories.category_key == cat_data["category_key"])
+        )
+        if existing is None:
+            row = WorkflowCategories(**cat_data)
+            session.add(row)
+            await session.flush()
+            key_to_id[cat_data["category_key"]] = row.category_id
+        else:
+            existing.short_name = cat_data["short_name"]
+            existing.long_name = cat_data["long_name"]
+            existing.sort_order = cat_data["sort_order"]
+            key_to_id[cat_data["category_key"]] = existing.category_id
     await session.commit()
-    print("[seed] Workflow types seeded successfully.")
+    return key_to_id
+
+
+async def _seed_workflow_types(session: AsyncSession, category_ids: dict[str, int]):
+    """Upsert by type_name. Resolves category_id from category_key."""
+    print(f"[seed] Upserting {len(WORKFLOW_TYPE_DEFAULTS)} workflow types...")
+    for wf_data in WORKFLOW_TYPE_DEFAULTS:
+        category_key = wf_data["category_key"]
+        category_id = category_ids.get(category_key)
+        if category_id is None:
+            raise RuntimeError(
+                f"[seed] Unknown category_key '{category_key}' for type '{wf_data['type_name']}'. "
+                f"Known categories: {list(category_ids.keys())}"
+            )
+
+        row_fields = {
+            "type_name": wf_data["type_name"],
+            "type_desc": wf_data["type_desc"],
+            "short_name": wf_data["short_name"],
+            "long_name": wf_data["long_name"],
+            "category_id": category_id,
+            "default_config": wf_data["default_config"],
+            "required_services": wf_data["required_services"],
+        }
+
+        existing = await session.scalar(
+            select(WorkflowTypes).where(WorkflowTypes.type_name == wf_data["type_name"])
+        )
+        if existing is None:
+            session.add(WorkflowTypes(type_id=wf_data["type_id"], **row_fields))
+        else:
+            for field, value in row_fields.items():
+                setattr(existing, field, value)
+    await session.commit()
+
+    # Fix sequence after potential explicit type_id inserts
+    await session.execute(
+        text(
+            "SELECT setval(pg_get_serial_sequence('workflow_types', 'type_id'), "
+            "(SELECT MAX(type_id) FROM workflow_types))"
+        )
+    )
+    await session.commit()
+    print("[seed] Workflow types upserted successfully.")
 
 
 async def run_seed():
     async with SqlAsyncSession() as session:
         await _seed(session)
     async with SqlAsyncSession() as session:
-        await _seed_workflow_types(session)
+        category_ids = await _seed_workflow_categories(session)
+        await _seed_workflow_types(session, category_ids)
 
 
 def run_seed_sync():

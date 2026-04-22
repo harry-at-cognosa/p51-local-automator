@@ -114,11 +114,25 @@ class UserManageUpdate(BaseModel):
 # ── Workflow schemas ─────────────────────────────────────────
 
 
+class WorkflowCategoryRead(BaseModel):
+    category_id: int
+    category_key: str
+    short_name: str
+    long_name: str
+    sort_order: int
+    enabled: bool
+
+    class Config:
+        from_attributes = True
+
+
 class WorkflowTypeRead(BaseModel):
     type_id: int
     type_name: str
     type_desc: str
-    type_category: str
+    short_name: str
+    long_name: str
+    category: WorkflowCategoryRead
     default_config: dict
     required_services: list | dict
     enabled: bool
@@ -151,11 +165,35 @@ class UserWorkflowRead(BaseModel):
         from_attributes = True
 
 
+class UserWorkflowListRead(BaseModel):
+    """List-page row: adds nested type (with category) and latest-run status."""
+    workflow_id: int
+    user_id: int
+    group_id: int
+    type_id: int
+    name: str
+    schedule: dict | None
+    enabled: bool
+    last_run_at: datetime | None
+    created_at: datetime
+    type: WorkflowTypeRead
+    latest_run_status: str | None
+    latest_run_at: datetime | None
+    latest_run_artifact_count: int | None
+
+    class Config:
+        from_attributes = True
+
+
 class UserWorkflowUpdate(BaseModel):
     name: str | None = None
     config: dict | None = None
     schedule: dict | None = None
     enabled: bool | None = None
+
+
+class BulkDeleteRequest(BaseModel):
+    workflow_ids: list[int]
 
 
 class WorkflowRunRead(BaseModel):
@@ -168,6 +206,7 @@ class WorkflowRunRead(BaseModel):
     started_at: datetime
     completed_at: datetime | None
     error_detail: str | None
+    artifact_count: int = 0
 
     class Config:
         from_attributes = True
@@ -199,6 +238,7 @@ class WorkflowArtifactRead(BaseModel):
     file_size: int
     description: str
     created_at: datetime
+    file_exists: bool = True
 
     class Config:
         from_attributes = True

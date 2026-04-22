@@ -90,6 +90,20 @@ class GroupSettings(Base):
 # ── Workflow tables (new for this project) ──────────────────────
 
 
+class WorkflowCategories(Base):
+    """Top-level groupings for workflow types (seeded; no CRUD UI)."""
+    __tablename__ = "workflow_categories"
+
+    category_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category_key: Mapped[str] = mapped_column(VARCHAR(32), nullable=False, unique=True)
+    short_name: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    long_name: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
+
+    workflow_types: Mapped[list["WorkflowTypes"]] = relationship("WorkflowTypes", back_populates="category")
+
+
 class WorkflowTypes(Base):
     """Catalog of available automation types (seeded at startup)."""
     __tablename__ = "workflow_types"
@@ -97,11 +111,18 @@ class WorkflowTypes(Base):
     type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     type_name: Mapped[str] = mapped_column(VARCHAR(64), nullable=False, unique=True)
     type_desc: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
-    type_category: Mapped[str] = mapped_column(VARCHAR(32), nullable=False, server_default=text("'general'"))
+    category_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("workflow_categories.category_id", name="fk_workflow_types_category_id"),
+        nullable=False,
+    )
+    short_name: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    long_name: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
     default_config: Mapped[dict] = mapped_column(JSON, nullable=False, server_default=text("'{}'"))
     required_services: Mapped[dict] = mapped_column(JSON, nullable=False, server_default=text("'[]'"))
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
 
+    category: Mapped["WorkflowCategories"] = relationship("WorkflowCategories", back_populates="workflow_types")
     user_workflows: Mapped[list["UserWorkflows"]] = relationship("UserWorkflows", back_populates="workflow_type")
 
 
@@ -129,6 +150,7 @@ class UserWorkflows(Base):
     config: Mapped[dict] = mapped_column(JSON, nullable=False, server_default=text("'{}'"))
     schedule: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
+    deleted: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

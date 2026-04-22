@@ -6,6 +6,7 @@ import {
 } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
+import StatusBadge from "../components/StatusBadge";
 
 interface UserWorkflow {
   workflow_id: number;
@@ -30,6 +31,7 @@ interface WorkflowRun {
   started_at: string;
   completed_at: string | null;
   error_detail: string | null;
+  artifact_count: number;
 }
 
 export default function WorkflowDetail() {
@@ -41,6 +43,7 @@ export default function WorkflowDetail() {
   const [runMessage, setRunMessage] = useState("");
   const [showConfig, setShowConfig] = useState(false);
   const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
+  const [editName, setEditName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState("");
 
@@ -75,13 +78,16 @@ export default function WorkflowDetail() {
     }
   };
 
+  const isEditNameValid = editName.trim().length >= 1 && editName.trim().length <= 200;
+
   const saveConfig = async () => {
+    if (!isEditNameValid) return;
     try {
-      await axiosClient.put(`/workflows/${id}`, { config: editConfig });
+      await axiosClient.put(`/workflows/${id}`, { name: editName.trim(), config: editConfig });
       setShowConfig(false);
       fetchData();
     } catch {
-      alert("Invalid JSON");
+      alert("Failed to save workflow.");
     }
   };
 
@@ -89,16 +95,6 @@ export default function WorkflowDetail() {
     if (!confirm("Delete this workflow?")) return;
     await axiosClient.delete(`/workflows/${id}`);
     navigate("/app/workflows");
-  };
-
-  const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      completed: "success",
-      running: "primary",
-      failed: "danger",
-      pending: "secondary",
-    };
-    return <Badge bg={colors[status] || "secondary"}>{status}</Badge>;
   };
 
   if (!workflow) return <Container className="p-4"><Spinner animation="border" /></Container>;
@@ -148,7 +144,14 @@ export default function WorkflowDetail() {
           >
             {running ? <><Spinner size="sm" animation="border" className="me-1" /> Running...</> : "Run Now"}
           </Button>
-          <Button variant="outline-secondary" onClick={() => { setEditConfig({ ...workflow.config }); setShowConfig(true); }}>
+          <Button
+            variant="outline-secondary"
+            onClick={() => {
+              setEditConfig({ ...workflow.config });
+              setEditName(workflow.name);
+              setShowConfig(true);
+            }}
+          >
             Edit Config
           </Button>
           <Button variant="outline-danger" onClick={deleteWorkflow}>Delete</Button>
@@ -227,7 +230,7 @@ export default function WorkflowDetail() {
                       return (
                         <tr key={r.run_id}>
                           <td>#{r.run_id}</td>
-                          <td>{statusBadge(r.status)}</td>
+                          <td><StatusBadge status={r.status} /></td>
                           <td>{r.current_step}/{r.total_steps}</td>
                           <td><Badge bg="light" text="dark">{r.trigger}</Badge></td>
                           <td>{new Date(r.started_at).toLocaleString()}</td>
@@ -236,6 +239,8 @@ export default function WorkflowDetail() {
                             <Button
                               size="sm"
                               variant="outline-primary"
+                              disabled={r.artifact_count === 0}
+                              title={r.artifact_count === 0 ? "No output for this run" : undefined}
                               onClick={() => navigate(`/app/runs/${r.run_id}`)}
                             >
                               Details
@@ -257,11 +262,26 @@ export default function WorkflowDetail() {
           <Modal.Title>Edit Configuration</Modal.Title>
         </Modal.Header>
         <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Name</Form.Label>
+            <Form.Control
+              type="text"
+              value={editName}
+              maxLength={200}
+              isInvalid={!isEditNameValid}
+              onChange={(e) => setEditName(e.target.value)}
+            />
+            <Form.Control.Feedback type="invalid">
+              Name is required (up to 200 characters).
+            </Form.Control.Feedback>
+          </Form.Group>
+          <hr />
+          <h6 className="mb-3">Configuration</h6>
           <WorkflowConfigForm typeId={workflow.type_id} config={editConfig} onChange={setEditConfig} />
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowConfig(false)}>Cancel</Button>
-          <Button variant="primary" onClick={saveConfig}>Save</Button>
+          <Button variant="primary" onClick={saveConfig} disabled={!isEditNameValid}>Save</Button>
         </Modal.Footer>
       </Modal>
     </Container>

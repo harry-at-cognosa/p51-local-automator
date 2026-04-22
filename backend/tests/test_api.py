@@ -130,6 +130,21 @@ class TestSettings:
 
 
 class TestWorkflows:
+    def test_list_categories(self, admin_headers):
+        r = httpx.get(f"{BASE}/workflow-categories", headers=admin_headers)
+        assert r.status_code == 200
+        cats = r.json()
+        keys = {c["category_key"] for c in cats}
+        assert keys == {"email", "calendar", "analysis", "queries"}
+        # short/long name pairs must come through
+        for c in cats:
+            assert c["short_name"]
+            assert c["long_name"]
+
+    def test_list_categories_requires_auth(self):
+        r = httpx.get(f"{BASE}/workflow-categories")
+        assert r.status_code == 401
+
     def test_list_types(self, admin_headers):
         r = httpx.get(f"{BASE}/workflow-types", headers=admin_headers)
         assert r.status_code == 200
@@ -138,6 +153,12 @@ class TestWorkflows:
         names = [t["type_name"] for t in types]
         assert "Email Topic Monitor" in names
         assert "Calendar Digest" in names
+        # Types now nest their category
+        for t in types:
+            assert "category" in t
+            assert t["category"]["category_key"] in {"email", "calendar", "analysis", "queries"}
+            assert t["short_name"]
+            assert t["long_name"]
 
     def test_create_workflow(self, admin_headers):
         r = httpx.post(f"{BASE}/workflows", headers=admin_headers, json={
@@ -150,13 +171,20 @@ class TestWorkflows:
         assert wf["name"] == "API Test Calendar"
         assert wf["type_id"] == 3
 
-    def test_list_workflows(self, admin_headers):
+    def test_list_workflows_has_category_and_status(self, admin_headers):
         r = httpx.get(f"{BASE}/workflows", headers=admin_headers)
         assert r.status_code == 200
-        assert len(r.json()) >= 1
+        rows = r.json()
+        assert len(rows) >= 1
+        first = rows[0]
+        # New fields
+        assert "latest_run_status" in first
+        assert "latest_run_at" in first
+        assert "type" in first
+        assert first["type"]["category"]["category_key"] in {"email", "calendar", "analysis", "queries"}
+        # Old per-row "enabled" still present, but UI drops it
 
-    def test_update_workflow(self, admin_headers):
-        # Create one first
+    def test_update_workflow_name_and_config(self, admin_headers):
         r = httpx.post(f"{BASE}/workflows", headers=admin_headers, json={
             "type_id": 1,
             "name": "Temp Workflow",
@@ -164,16 +192,71 @@ class TestWorkflows:
         })
         wf_id = r.json()["workflow_id"]
 
-        # Update name
         r = httpx.put(f"{BASE}/workflows/{wf_id}", headers=admin_headers, json={
             "name": "Renamed Workflow",
+            "config": {"account": "harry@cognosa.net"},
         })
         assert r.status_code == 200
-        assert r.json()["name"] == "Renamed Workflow"
+        body = r.json()
+        assert body["name"] == "Renamed Workflow"
+        assert body["config"]["account"] == "harry@cognosa.net"
 
-        # Delete
+        # Cleanup via soft-delete
         r = httpx.delete(f"{BASE}/workflows/{wf_id}", headers=admin_headers)
         assert r.status_code == 200
+
+    def test_delete_is_soft(self, admin_headers):
+        r = httpx.post(f"{BASE}/workflows", headers=admin_headers, json={
+            "type_id": 1,
+            "name": "Soft-delete Target",
+            "config": {},
+        })
+        wf_id = r.json()["workflow_id"]
+
+        r = httpx.delete(f"{BASE}/workflows/{wf_id}", headers=admin_headers)
+        assert r.status_code == 200
+
+        # After soft-delete, GET and PUT should 404 for this ID
+        r = httpx.get(f"{BASE}/workflows/{wf_id}", headers=admin_headers)
+        assert r.status_code == 404
+        r = httpx.put(f"{BASE}/workflows/{wf_id}", headers=admin_headers, json={"name": "ghost"})
+        assert r.status_code == 404
+        r = httpx.get(f"{BASE}/workflows/{wf_id}/runs", headers=admin_headers)
+        assert r.status_code == 404
+
+        # And it must not appear in the list
+        r = httpx.get(f"{BASE}/workflows", headers=admin_headers)
+        ids = {row["workflow_id"] for row in r.json()}
+        assert wf_id not in ids
+
+    def test_bulk_delete_scoped_to_group(self, admin_headers):
+        # Create 3 workflows
+        ids = []
+        for i in range(3):
+            r = httpx.post(f"{BASE}/workflows", headers=admin_headers, json={
+                "type_id": 1,
+                "name": f"Bulk target {i}",
+                "config": {},
+            })
+            ids.append(r.json()["workflow_id"])
+
+        # Include one clearly bogus ID that belongs to no one
+        r = httpx.post(f"{BASE}/workflows/bulk-delete", headers=admin_headers,
+                       json={"workflow_ids": ids + [999_999_999]})
+        assert r.status_code == 200
+        # Exactly the 3 real IDs got soft-deleted
+        assert r.json()["deleted_count"] == 3
+
+        # All three should now 404 on individual reads
+        for wf_id in ids:
+            r = httpx.get(f"{BASE}/workflows/{wf_id}", headers=admin_headers)
+            assert r.status_code == 404
+
+    def test_bulk_delete_empty_list(self, admin_headers):
+        r = httpx.post(f"{BASE}/workflows/bulk-delete", headers=admin_headers,
+                       json={"workflow_ids": []})
+        assert r.status_code == 200
+        assert r.json()["deleted_count"] == 0
 
 
 class TestDashboard:
