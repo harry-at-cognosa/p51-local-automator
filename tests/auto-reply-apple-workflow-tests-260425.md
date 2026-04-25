@@ -19,7 +19,11 @@ All six scenarios run through Apple Mail MCP today. "Gmail" tests here mean **a 
 3. **At least one form-submission email** in `harry@cognosa.net` INBOX matching:
    - Sender contains `form-submission@squarespace.info`
    - Body contains `Sent via form submission from CogWrite Semantic Technologies`
-4. **At least one test email** in iCloud INBOX matching whatever filter you use for scenarios 4–5. Easiest: send yourself an email with a unique tag string in the body (e.g. `__P51TEST__`) and use that as the body filter.
+4. **At least one Apple Card dispute notification email** in iCloud INBOX from `post.applecard.com`. These are the test pattern for scenarios 4–5. Each one identifiably contains both:
+   - `Apple Card Customer:` (header line)
+   - `Contact us to help resolve your dispute.` (body sentence)
+
+   The platform's filter takes a single substring, so we'll use the more distinctive of the two (`Contact us to help resolve your dispute.`) as `body_contains`. The other string is just a visual confirmation that you're looking at the right email. Note: these are `noreply` emails — testing exists to verify draft generation and the account-selector behavior, **not** to send a real reply to Apple.
 5. **Logged in** as admin in the browser at `http://localhost:8001/`.
 
 ## DB queries you'll use repeatedly
@@ -152,19 +156,19 @@ SELECT action FROM email_auto_reply_log WHERE workflow_id=68 ORDER BY log_id DES
 
 ---
 
-## Scenario 4 — Type 5 (Draft Only), iCloud
+## Scenario 4 — Type 5 (Draft Only), iCloud (Apple Card dispute emails)
 
-**Goal:** Verify the same draft path works for iCloud — the account selector is honored, drafts land in the iCloud Drafts folder, sender is correct.
+**Goal:** Verify the same draft path works for iCloud — the account selector is honored, drafts land in the iCloud Drafts folder, sender is correct. Uses real Apple Card dispute notification emails as the source data so no synthetic test emails are needed.
 
 **Setup:**
-1. Send yourself an email *to your iCloud address* containing the unique string `__P51TEST__` somewhere in the body. Make sure it lands in iCloud INBOX.
+1. Confirm you have at least one unhandled Apple Card dispute notification in iCloud INBOX (sender ends `post.applecard.com`, body contains `Contact us to help resolve your dispute.`).
 2. New Workflow → `Email — Draft Reply`.
-3. Name: `S4 - Draft via iCloud`.
+3. Name: `S4 - Draft via iCloud (Apple Card)`.
 4. Config:
    - Account: `iCloud`
    - Mailbox: `INBOX`
-   - Sender filter: leave empty
-   - Body contains: `__P51TEST__`
+   - Sender filter: `post.applecard.com`
+   - Body contains: `Contact us to help resolve your dispute.`
    - Signature: anything short
 5. Save.
 
@@ -174,9 +178,13 @@ SELECT action FROM email_auto_reply_log WHERE workflow_id=68 ORDER BY log_id DES
 3. Open Mail.app → iCloud → Drafts.
 
 **Expected:**
-- One new draft addressed to the original sender (yourself).
+- One new draft per matched message.
+- Each draft addressed to the noreply address from the Apple Card sender (e.g. `noreply@post.applecard.com` or whatever's in the From / Reply-To header).
 - The draft is in iCloud's Drafts folder, NOT Gmail's. (Critical — verifies `from_account` is honored in `mail_save_draft`.)
 - Sender shown is iCloud.
+- LLM-generated body is reasonable given the Apple Card content (will probably acknowledge the dispute notice in a generic-but-on-topic way).
+
+**Don't actually send these drafts.** They go to a noreply address. The point is to verify the platform mechanics, not produce a real reply. Delete the drafts after inspection.
 
 **DB verification:**
 ```sql
@@ -186,19 +194,21 @@ SELECT action, source_account FROM email_auto_reply_log WHERE workflow_id=<id>;
 
 ---
 
-## Scenario 5 — Type 6 (Approve), iCloud, Save as Draft path
+## Scenario 5 — Type 6 (Approve), iCloud, Save as Draft path (Apple Card)
 
 **Goal:** Verify the third action (Save as Draft) on the approval queue uses AppleScript to save into the right account's Drafts, without sending.
 
 **Setup:**
-1. Send yourself another iCloud-bound test email with a different unique string `__P51TEST_S5__`.
+1. Confirm there's an unhandled Apple Card dispute email in iCloud INBOX that hasn't already been processed by Scenario 4's workflow. (If Scenario 4 already drafted from your only candidate, submit a new dispute follow-up isn't realistic — just wait for the next Apple Card dispute notification, or run scenario 4 first against an older message and use a newer one here. The dedup log is per-workflow, so a different workflow_id will treat the same message as fresh.)
 2. New Workflow → `Email — Approve Reply`.
-3. Config:
+3. Name: `S5 - Approve via iCloud (Apple Card)`.
+4. Config:
    - Account: `iCloud`
-   - Sender filter: empty
-   - Body contains: `__P51TEST_S5__`
+   - Mailbox: `INBOX`
+   - Sender filter: `post.applecard.com`
+   - Body contains: `Contact us to help resolve your dispute.`
    - Signature: anything
-4. Save.
+5. Save.
 
 **Steps:**
 1. Run Now.
@@ -210,6 +220,8 @@ SELECT action, source_account FROM email_auto_reply_log WHERE workflow_id=<id>;
 - Green notice: `#<pending_id>: saved_as_draft`.
 - A new draft appears in iCloud Drafts (NOT Gmail Drafts), with the edited body and your signature appended.
 - No outgoing email sent — Sent Mail unchanged.
+
+**Important:** do NOT click `Approve & Send` here. The to_address is a noreply Apple address — sending would either bounce or vanish into Apple's noreply void, neither of which validates anything useful. Save as Draft is the action under test.
 
 **DB verification:**
 ```sql
@@ -262,14 +274,14 @@ If this scenario produces ANY drafts, that's a bug — file it before any furthe
 
 ## Coverage matrix
 
-| Scenario | Workflow Type | Account | Action exercised |
-|---|---|---|---|
-| 1 | Approve (6) | Gmail | Edit & Send |
-| 2 | Approve (6) | Gmail | Reject + dedup |
-| 3 | Draft Only (5) | Gmail | Save to Drafts via AppleScript |
-| 4 | Draft Only (5) | iCloud | Account-selector honored |
-| 5 | Approve (6) | iCloud | Save as Draft from queue |
-| 6 (bonus) | Draft Only (5) | iCloud | Empty-filter safety guard |
+| Scenario | Workflow Type | Account | Test data | Action exercised |
+|---|---|---|---|---|
+| 1 | Approve (6) | Gmail | Squarespace form submission | Edit & Send |
+| 2 | Approve (6) | Gmail | Squarespace form submission | Reject + dedup |
+| 3 | Draft Only (5) | Gmail | Squarespace form submission | Save to Drafts via AppleScript |
+| 4 | Draft Only (5) | iCloud | Apple Card dispute notification | Account-selector honored |
+| 5 | Approve (6) | iCloud | Apple Card dispute notification | Save as Draft from queue |
+| 6 (bonus) | Draft Only (5) | iCloud | (none — empty-filter test) | Empty-filter safety guard |
 
 - 2 scenarios per workflow type minimum: 5 covers 3, 6 covers 3 ✓
 - 2 scenarios per account minimum: Gmail covers 3, iCloud covers 3 ✓
@@ -289,5 +301,5 @@ If this scenario produces ANY drafts, that's a bug — file it before any furthe
 
 - **Mail.app must remain open** during runs that save drafts — AppleScript launches it if needed but it's faster if already running.
 - **First LLM call may take 8–15 seconds**; subsequent calls in the same run are faster due to prompt caching.
-- **Reply-To extraction** only works if the source email actually has a `Reply-To` header — otherwise it falls back to the `From` address. For Squarespace forms this is fine because Reply-To is set to the submitter's email; for other senders it may not be.
+- **Reply-To extraction** only works if the source email actually has a `Reply-To` header — otherwise it falls back to the `From` address. For Squarespace forms this is set to the submitter's email (great). For Apple Card dispute notifications it's typically a noreply address and the draft will be addressed there — fine for testing the platform mechanics, but those drafts should never actually be sent.
 - **No iCloud-to-Gmail or vice-versa cross-account testing** — the account selected in config is also the sender. If your test email arrived in iCloud but you set the workflow to use `harry@cognosa.net`, the workflow will look in Gmail's INBOX, not iCloud's. Match account to where the test email lives.
