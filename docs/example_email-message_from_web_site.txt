@@ -15,7 +15,7 @@ security:	 Standard encryption (TLS) Learn more
 
 == 
 
-texit includes:
+text includes:
 
 Squarespace <form-submission@squarespace.info>
 11:43 AM (0 minutes ago)
