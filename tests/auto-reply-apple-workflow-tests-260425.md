@@ -272,6 +272,54 @@ If this scenario produces ANY drafts, that's a bug — file it before any furthe
 
 ---
 
+## Scenario 7 — Same-source consolidation: one ack, latest wins, siblings dedup'd
+
+**Goal:** Verify the engine's per-`to_address` consolidation. When multiple matching messages share the same recipient address (typically the same form-submitter), the workflow must produce exactly ONE pending reply (or draft), addressed at the most recent message, while ALL message IDs in the group land in the dedup log so future runs skip the whole group.
+
+**Setup:**
+1. Either submit your Squarespace contact form **3 times in quick succession with the same Reply-To email** (your own test address that you don't normally use), or — easier — send 3 emails to yourself manually that each match a chosen sender_filter + body_contains pair. Make sure all three appear in the SAME inbox (iCloud or Gmail-in-Mail.app).
+2. New Workflow → `Email — Approve Reply` (type 6).
+3. Name: `S7 - Consolidation`.
+4. Config: filters that match all three emails. Tone/signature anything.
+5. Save.
+
+**Steps:**
+1. Note the message IDs of the 3 emails ahead of time (Mail.app shows them in raw source view, or query Apple Mail MCP). Also note their dates so you know which is "latest".
+2. Run Now.
+3. Open `Pending replies`.
+
+**Expected:**
+- **Exactly ONE pending reply row.** Not three.
+- Its `subject` should be `Re: <subject of the LATEST of the three emails>` — verifying the winner-by-date logic.
+- Its `to_address` matches the shared Reply-To.
+- The workflow run's Step 1 output summary says `Drafted 1 reply/replies for review.` (just one — even though three matched).
+- The workflow run's Step 2 summary mentions `Consolidated 2 older sibling message(s).`
+
+**DB verification (the critical one):**
+```sql
+SELECT source_message_id, action, pending_id
+FROM email_auto_reply_log
+WHERE workflow_id=<id>
+ORDER BY log_id;
+-- expect: 3 rows, all action='queued_for_approval'
+-- The winner row has pending_id populated; the two sibling rows have pending_id NULL
+```
+
+```sql
+SELECT COUNT(*) FROM pending_email_replies WHERE workflow_id=<id>;
+-- expect: 1
+```
+
+**Negative-confirmation step:**
+4. Run Now AGAIN without doing anything else.
+5. Verify Step 1 summary: `Drafted 0 reply/replies for review.` (all three messages are now in the dedup log, so they're skipped on subsequent runs.)
+
+**Why this matters:** without consolidation, a chatty submitter who pings the form 3 times in 5 minutes would generate 3 LLM calls and 3 separate replies, each saying nearly the same thing. Consolidation says: "one acknowledgment per submitter per run, addressing their latest message." This also saves real Anthropic tokens — only one LLM call per group.
+
+**Engine reference:** the consolidation lives in `email_auto_reply_engine.py:find_and_generate_candidates`. Phase 1 collects matches into `grouped: dict[to_address, list[message]]`. Phase 2 sorts each group by date desc and only LLM-generates for index 0; older indices ride along as `additional_handled_message_ids` on the candidate. Each runner writes a dedup row for the winner AND each sibling.
+
+---
+
 ## Coverage matrix
 
 | Scenario | Workflow Type | Account | Test data | Action exercised |
@@ -282,8 +330,9 @@ If this scenario produces ANY drafts, that's a bug — file it before any furthe
 | 4 | Draft Only (5) | iCloud | Apple Card dispute notification | Account-selector honored |
 | 5 | Approve (6) | iCloud | Apple Card dispute notification | Save as Draft from queue |
 | 6 (bonus) | Draft Only (5) | iCloud | (none — empty-filter test) | Empty-filter safety guard |
+| 7 | Approve (6) | either | 3 messages, same Reply-To | Same-source consolidation, latest wins |
 
-- 2 scenarios per workflow type minimum: 5 covers 3, 6 covers 3 ✓
+- 2 scenarios per workflow type minimum: 5 covers 3, 6 covers 3, 7 covers 6 again ✓
 - 2 scenarios per account minimum: Gmail covers 3, iCloud covers 3 ✓
 
 ## Cleanup after testing

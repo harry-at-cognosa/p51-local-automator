@@ -40,9 +40,10 @@ async def run_email_auto_reply_draft(
             await engine.complete_run(session, run)
             return run
 
-        # Step 2: save each draft via AppleScript + log dedup
+        # Step 2: save each draft via AppleScript + log dedup (winner + siblings)
         step_save = await engine.start_step(session, run.run_id, 2, "Save drafts to Mail.app")
         saved = 0
+        covered_total = 0  # count of older siblings folded into a saved draft
         errors: list[str] = []
         for c in candidates:
             try:
@@ -57,6 +58,7 @@ async def run_email_auto_reply_draft(
                 log.error("draft_save_failed", msg_id=c.source_message_id, error=str(e))
                 continue
 
+            # Dedup row for the chosen (winner) message
             session.add(
                 EmailAutoReplyLog(
                     workflow_id=workflow.workflow_id,
@@ -65,11 +67,24 @@ async def run_email_auto_reply_draft(
                     action="draft_saved",
                 )
             )
+            # Dedup rows for each older sibling covered by this draft
+            for sib_id in c.additional_handled_message_ids:
+                session.add(
+                    EmailAutoReplyLog(
+                        workflow_id=workflow.workflow_id,
+                        source_message_id=sib_id,
+                        source_account=c.source_account,
+                        action="draft_saved",
+                    )
+                )
+            covered_total += len(c.additional_handled_message_ids)
             saved += 1
 
         await session.commit()
 
         summary = f"Saved {saved} of {len(candidates)} drafts to {from_account} Drafts."
+        if covered_total:
+            summary += f" Consolidated {covered_total} older sibling message(s) under their newer sender."
         if errors:
             summary += f" Errors: {'; '.join(errors[:3])}"
         if saved == 0 and errors:
@@ -88,9 +103,17 @@ async def run_email_auto_reply_draft(
         with open(log_path, "w") as f:
             f.write(f"Auto-Reply (Draft Only) — run #{run.run_id}\n")
             f.write(f"Account: {from_account}\n")
-            f.write(f"Saved: {saved} / {len(candidates)}\n\n")
+            f.write(f"Saved: {saved} / {len(candidates)}\n")
+            if covered_total:
+                f.write(f"Older sibling messages folded in (dedup'd): {covered_total}\n")
+            f.write("\n")
             for c in candidates:
                 f.write(f"- to={c.to_address}  subject={c.reply_subject!r}\n")
+                f.write(f"    winner_msg_id={c.source_message_id}\n")
+                if c.additional_handled_message_ids:
+                    f.write(
+                        f"    covered_msg_ids={','.join(c.additional_handled_message_ids)}\n"
+                    )
         await engine.record_artifact(session, run.run_id, step_log.step_id, log_path, "txt", "Drafts saved log")
         await engine.complete_step(session, step_log, output_summary=f"Wrote {log_path}")
 

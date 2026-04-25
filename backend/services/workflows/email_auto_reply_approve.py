@@ -48,9 +48,10 @@ async def run_email_auto_reply_approve(
             await engine.complete_run(session, run)
             return run
 
-        # Step 2: insert each into pending_email_replies + dedup log
+        # Step 2: insert each into pending_email_replies + dedup log (winner + siblings)
         step_queue = await engine.start_step(session, run.run_id, 2, "Queue for approval")
         queued = 0
+        covered_total = 0  # count of older siblings folded into a queued reply
         for c in candidates:
             pending = PendingEmailReplies(
                 workflow_id=workflow.workflow_id,
@@ -68,6 +69,7 @@ async def run_email_auto_reply_approve(
             session.add(pending)
             await session.flush()  # need pending.pending_id for the log FK
 
+            # Dedup row for the chosen (winner) message — pending_id linked
             session.add(
                 EmailAutoReplyLog(
                     workflow_id=workflow.workflow_id,
@@ -77,11 +79,25 @@ async def run_email_auto_reply_approve(
                     pending_id=pending.pending_id,
                 )
             )
+            # Dedup rows for older siblings (no pending_id — they're not in the queue,
+            # they're just covered by the winner so they don't reappear in future runs)
+            for sib_id in c.additional_handled_message_ids:
+                session.add(
+                    EmailAutoReplyLog(
+                        workflow_id=workflow.workflow_id,
+                        source_message_id=sib_id,
+                        source_account=c.source_account,
+                        action="queued_for_approval",
+                    )
+                )
+            covered_total += len(c.additional_handled_message_ids)
             queued += 1
 
         await session.commit()
 
         summary = f"Queued {queued} reply/replies for human approval."
+        if covered_total:
+            summary += f" Consolidated {covered_total} older sibling message(s)."
         await engine.complete_step(session, step_queue, output_summary=summary)
 
         await engine.complete_run(session, run)

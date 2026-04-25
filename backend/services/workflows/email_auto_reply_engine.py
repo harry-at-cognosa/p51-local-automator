@@ -6,13 +6,19 @@ this module. It handles:
   - Filtering candidates by sender and body-substring criteria
   - Skipping already-handled messages via email_auto_reply_log
   - Pulling full body + reply-to from each candidate
-  - Generating the reply text with Claude
+  - Collapsing multiple matches from the same to_address into one candidate
+    (the most recent), with the older siblings tracked for dedup
+  - Generating the reply text with Claude (only for the winning message
+    per group, never for siblings — saves tokens)
 
 The terminal action (save to Drafts, or insert into pending_email_replies,
-or send directly) is the caller's responsibility.
+or send directly) is the caller's responsibility. Callers MUST also write
+dedup-log rows for both the chosen source_message_id AND every entry in
+additional_handled_message_ids so the whole group is marked handled.
 """
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +32,13 @@ log = get_logger("email_auto_reply")
 
 @dataclass
 class ReplyCandidate:
-    """A matched inbound email with its generated reply draft."""
+    """A matched inbound email with its generated reply draft.
+
+    `additional_handled_message_ids` are sibling messages from the same
+    `to_address` group that were superseded by this candidate (the most
+    recent one wins). Runners must log dedup rows for them so they don't
+    reappear in future runs.
+    """
     source_message_id: str
     source_account: str
     source_mailbox: str
@@ -37,9 +49,13 @@ class ReplyCandidate:
     reply_subject: str      # LLM-generated "Re: ..."
     reply_body: str         # LLM-generated body (with signature if configured)
     llm_tokens: int
+    additional_handled_message_ids: list[str] = field(default_factory=list)
 
 
 _EMAIL_RE = re.compile(r"[\w.+\-]+@[\w\-]+\.[\w.\-]+")
+
+# Apple Mail's default date format, e.g. "Wednesday, April 15, 2026 at 4:11:39 PM"
+_DATE_FMT = "%A, %B %d, %Y %I:%M:%S %p"
 
 
 def _extract_email(raw: str) -> str:
@@ -48,6 +64,17 @@ def _extract_email(raw: str) -> str:
         return ""
     m = _EMAIL_RE.search(raw)
     return m.group(0) if m else raw.strip()
+
+
+def _parse_mail_date(date_str: str) -> datetime | None:
+    """Parse Apple Mail's date format. Returns None if unparseable."""
+    if not date_str:
+        return None
+    try:
+        cleaned = date_str.replace(" at ", " ")
+        return datetime.strptime(cleaned, _DATE_FMT).replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        return None
 
 
 def _matches_filters(msg: dict, body: str, sender_filter: str, body_contains: str) -> bool:
@@ -91,13 +118,25 @@ async def find_and_generate_candidates(
     workflow: UserWorkflows,
     max_candidates: int = 20,
 ) -> list[ReplyCandidate]:
-    """Run Step 1+2+3 of either auto-reply runner: fetch, filter, LLM-draft.
+    """Fetch, filter, group-by-to_address, pick latest-per-group, LLM-draft.
+
+    Two-phase to avoid wasted LLM calls when multiple messages from the same
+    submitter would otherwise produce duplicate replies in a single run:
+
+      Phase 1 — list inbox, dedup-skip, fetch each candidate body, apply
+      sender/body filters, resolve to_address. Group all survivors by
+      to_address. NO LLM calls in this phase.
+
+      Phase 2 — for each to_address group, pick the message with the latest
+      Date header. Run the LLM only for that one. Attach the older siblings'
+      message IDs to the candidate so the runner can log dedup rows for them.
 
     Returns zero or more ReplyCandidate objects ready for the caller's
     terminal action (draft-save, queue for approval, or direct send).
 
     Does NOT write the dedup log — caller writes it only when the terminal
-    action succeeds.
+    action succeeds. Caller MUST log both source_message_id AND each entry
+    in additional_handled_message_ids.
     """
     config = workflow.config or {}
     account = config.get("account", "iCloud")
@@ -108,25 +147,24 @@ async def find_and_generate_candidates(
     tone = config.get("tone") or "warm and professional"
     fetch_limit = int(config.get("fetch_limit") or 50)
 
-    # Step 1: list recent messages
+    # ── Phase 1: fetch, filter, group by to_address ──────────────
     messages = await mcp_client.mail_list_messages(account, mailbox, limit=fetch_limit)
     if not messages:
         log.info("auto_reply_no_messages", workflow_id=workflow.workflow_id)
         return []
 
-    # Step 2: skip anything we've already acknowledged for this workflow
     ids = [str(m.get("id")) for m in messages if m.get("id") is not None]
     already = await _already_handled_ids(session, workflow.workflow_id, ids)
 
-    candidates: list[ReplyCandidate] = []
+    # Per-to_address bucket. Each item is a dict carrying everything the
+    # phase-2 winner-picker and LLM-call need.
+    grouped: dict[str, list[dict]] = {}
+
     for msg in messages:
-        if len(candidates) >= max_candidates:
-            break
         msg_id = str(msg.get("id") or "")
         if not msg_id or msg_id in already:
             continue
 
-        # Fetch full message to get body + reply-to
         try:
             full = await mcp_client.mail_get_message(account, mailbox, int(msg_id))
         except Exception as e:
@@ -145,24 +183,59 @@ async def find_and_generate_candidates(
             log.warning("auto_reply_no_reply_to", msg_id=msg_id)
             continue
 
-        # Step 3: LLM-generate the reply
+        parsed_date = _parse_mail_date(full.get("date") or msg.get("date") or "")
+
+        grouped.setdefault(to_address.lower(), []).append({
+            "msg_id": msg_id,
+            "to_address": to_address,
+            "source_from": source_from,
+            "source_subject": source_subject,
+            "source_body": body,
+            "date": parsed_date,
+        })
+
+    if not grouped:
+        return []
+
+    # ── Phase 2: pick latest per group, LLM-generate only the winners ──
+    candidates: list[ReplyCandidate] = []
+
+    for _to_key, items in grouped.items():
+        # Sort by parsed date descending; missing dates land last.
+        # `datetime.min` with a tzinfo is a safe minimum that compares correctly.
+        sentinel_min = datetime.min.replace(tzinfo=timezone.utc)
+        items.sort(key=lambda x: x["date"] or sentinel_min, reverse=True)
+
+        winner = items[0]
+        sibling_ids = [it["msg_id"] for it in items[1:]]
+
+        if len(items) > 1:
+            log.info(
+                "auto_reply_consolidated_group",
+                workflow_id=workflow.workflow_id,
+                to_address=winner["to_address"],
+                winner_msg_id=winner["msg_id"],
+                covered_count=len(sibling_ids),
+            )
+
+        # LLM call only on the winner
         try:
             llm = llm_service.generate_email_reply(
-                source_from=source_from,
-                source_subject=source_subject,
-                source_body=body,
+                source_from=winner["source_from"],
+                source_subject=winner["source_subject"],
+                source_body=winner["source_body"],
                 signature=signature,
                 tone=tone,
             )
         except Exception as e:
-            log.error("auto_reply_llm_failed", msg_id=msg_id, error=str(e))
+            log.error("auto_reply_llm_failed", msg_id=winner["msg_id"], error=str(e))
             continue
 
         result = llm.get("result") or {}
-        reply_subject = result.get("subject") or f"Re: {source_subject}"
+        reply_subject = result.get("subject") or f"Re: {winner['source_subject']}"
         reply_body = result.get("body") or ""
         if not reply_body.strip():
-            log.warning("auto_reply_empty_body", msg_id=msg_id)
+            log.warning("auto_reply_empty_body", msg_id=winner["msg_id"])
             continue
 
         usage = llm.get("usage") or {}
@@ -170,17 +243,21 @@ async def find_and_generate_candidates(
 
         candidates.append(
             ReplyCandidate(
-                source_message_id=msg_id,
+                source_message_id=winner["msg_id"],
                 source_account=account,
                 source_mailbox=mailbox,
-                source_from=source_from,
-                source_subject=source_subject,
-                source_body=body,
-                to_address=to_address,
+                source_from=winner["source_from"],
+                source_subject=winner["source_subject"],
+                source_body=winner["source_body"],
+                to_address=winner["to_address"],
                 reply_subject=reply_subject,
                 reply_body=reply_body,
                 llm_tokens=total_tokens,
+                additional_handled_message_ids=sibling_ids,
             )
         )
+
+        if len(candidates) >= max_candidates:
+            break
 
     return candidates
