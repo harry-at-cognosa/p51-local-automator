@@ -122,37 +122,53 @@ def generate_email_reply(
     source_from: str,
     source_subject: str,
     source_body: str,
+    to_address: str,
     signature: str = "",
     tone: str = "warm and professional",
 ) -> dict:
-    """Generate a short acknowledgment reply for an inbound form submission.
+    """Generate a short acknowledgment reply for an inbound message.
+
+    `to_address` is the resolved recipient — the actual address the reply will
+    be sent to. This is the ground truth for who we are writing to. Names that
+    appear in the body refer to other parties (the original recipient of a
+    transactional email, for example) and must NOT be used to address the
+    reply unless they clearly correspond to to_address.
 
     Returns a dict with "result" = {"subject": str, "body": str} and "usage" token counts.
-    Subject will typically be "Re: <original subject>" unless the LLM has a better idea.
     """
     sig_block = ""
     if signature:
-        sig_block = f"\n\nSignature to append at the end of the reply (use verbatim):\n---\n{signature}\n---"
+        sig_block = (
+            "\n\nSignature to append at the end of the reply (use verbatim, "
+            "do not modify):\n---\n" + signature + "\n---"
+        )
 
     system = (
-        "You write short, genuine acknowledgment replies to inbound form-submission emails. "
-        "Your goal: confirm receipt, reassure the sender their message was seen by a human, "
+        "You write short, genuine acknowledgment replies to inbound emails. "
+        "Your goal: confirm receipt, reassure the sender their message was seen, "
         "set a reasonable expectation for follow-up, and stay brief.\n\n"
+        "Critical context — the reply will be SENT TO the address provided as "
+        "`To (reply destination)`. That address is the ground truth for who you "
+        "are writing to. Names appearing in the message body may refer to OTHER "
+        "parties (e.g. the original recipient of a transactional notification) "
+        "and must NOT be used to address the reply unless you can confirm the "
+        "name belongs to the To address.\n\n"
         "Hard rules:\n"
         "- 2–4 sentences, no more.\n"
         "- Never promise a specific time commitment you can't keep; use phrases like 'soon' or 'within a few days'.\n"
-        "- Don't invent facts not in the source message (no made-up meetings, dates, or names).\n"
-        "- If the sender's name is visible in the message, address them by first name.\n"
-        "- Do NOT include a signature — a separate signature block is appended.\n"
+        "- Don't invent facts not in the source message (no made-up meetings, dates, or amounts).\n"
+        "- Address by first name ONLY if a name in the body clearly belongs to the To address; otherwise use a generic greeting like 'Hello,' or no greeting at all.\n"
+        "- Do NOT include a signature, sign-off block, or any name/email at the end. A separate signature block is appended afterward when configured. If no signature is configured, the reply ends with the body text and nothing else.\n"
         "- Tone: " + tone + ".\n\n"
         "Return ONLY a JSON object, no prose before or after:\n"
         "{\"subject\": \"Re: <original subject>\", \"body\": \"<reply text>\"}"
     )
 
     user_prompt = (
-        f"Inbound email:\n"
+        "Inbound email:\n"
         f"From: {source_from}\n"
         f"Subject: {source_subject}\n"
+        f"To (reply destination): {to_address}\n"
         f"Body:\n{source_body[:4000]}"
         f"{sig_block}"
     )
@@ -160,7 +176,9 @@ def generate_email_reply(
     result = judge_structured(system, user_prompt)
 
     # If a signature was provided, append it to the body the LLM returned so
-    # the model can't accidentally omit it.
+    # the model can't accidentally omit it. If NOT provided and the model
+    # invented one anyway, we have no safe way to strip it without risking
+    # over-deletion — the prompt now strongly tells the model not to.
     if signature and isinstance(result.get("result"), dict):
         body = result["result"].get("body", "")
         if signature.strip() and signature.strip() not in body:

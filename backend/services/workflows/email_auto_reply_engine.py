@@ -298,12 +298,15 @@ async def find_and_generate_candidates(
                 covered_count=len(sibling_ids),
             )
 
-        # LLM call only on the winner
+        # LLM call only on the winner. Pass to_address so the model knows
+        # who we're actually replying to — names in the body may refer to
+        # other parties.
         try:
             llm = llm_service.generate_email_reply(
                 source_from=winner["source_from"],
                 source_subject=winner["source_subject"],
                 source_body=winner["source_body"],
+                to_address=winner["to_address"],
                 signature=signature,
                 tone=tone,
             )
