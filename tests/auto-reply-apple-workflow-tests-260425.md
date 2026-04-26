@@ -1,12 +1,18 @@
 # Auto-Reply Workflow Tests
 
-**Date:** 2026-04-25
+**Date:** 2026-04-25 (revised after first test session)
 **Scope:** Validate the two newest workflow types end-to-end:
 
 - **Type 5** — `Auto-Reply (Draft Only)` (`short_name`: Draft Reply)
 - **Type 6** — `Auto-Reply (Approve Before Send)` (`short_name`: Approve Reply)
 
-Five scenarios + one safety check, covering both workflow types and both Mail.app accounts (iCloud and the Gmail account configured in Mail.app — `harry@cognosa.net`).
+Five scenarios + one safety check + one bonus, covering both workflow types and both Mail.app accounts (iCloud and the Gmail account configured in Mail.app — `harry@cognosa.net`).
+
+**Revision notes (post-first-session):**
+- Apple Card filter strings corrected: sender contains `post.applecard.apple` (not `.com`); body filter `dispute investigation` (the previously-suggested phrasing isn't in actual emails).
+- Workflow-creation modal button is **Create**, not Save (the Edit Configuration modal still uses Save).
+- Engine now handles HTML-only messages via an RFC822 fallback (was previously rejecting them silently as "0 body matches").
+- Diagnostic funnel + consolidation summary visible in step output — see "Diagnostic features available during testing" near the bottom.
 
 ## A note on "Apple vs Google"
 
@@ -19,11 +25,7 @@ All six scenarios run through Apple Mail MCP today. "Gmail" tests here mean **a 
 3. **At least one form-submission email** in `harry@cognosa.net` INBOX matching:
    - Sender contains `form-submission@squarespace.info`
    - Body contains `Sent via form submission from CogWrite Semantic Technologies`
-4. **At least one Apple Card dispute notification email** in iCloud INBOX from `post.applecard.com`. These are the test pattern for scenarios 4–5. Each one identifiably contains both:
-   - `Apple Card Customer:` (header line)
-   - `Contact us to help resolve your dispute.` (body sentence)
-
-   The platform's filter takes a single substring, so we'll use the more distinctive of the two (`Contact us to help resolve your dispute.`) as `body_contains`. The other string is just a visual confirmation that you're looking at the right email. Note: these are `noreply` emails — testing exists to verify draft generation and the account-selector behavior, **not** to send a real reply to Apple.
+4. **At least one Apple Card dispute notification email** in iCloud INBOX from `post.applecard.apple` (note the TLD is `.apple`, not `.com`). These are the test pattern for scenarios 4–5. Apple's wording varies, but a reliable distinctive substring is `dispute investigation` (appears in the body of dispute notifications). Other phrases that look like good filters (`Apple Card Customer:`, `Apple Card Specialist`) sometimes fail to match because Apple inserts invisible attachment-marker characters between words; single-pair phrases like `dispute investigation` are robust. Note: these are `noreply` emails — testing exists to verify draft generation and the account-selector behavior, **not** to send a real reply to Apple.
 5. **Logged in** as admin in the browser at `http://localhost:8001/`.
 
 ## DB queries you'll use repeatedly
@@ -59,20 +61,21 @@ WHERE r.workflow_id = <id> ORDER BY r.run_id DESC, s.step_number;
    - Body contains: `Sent via form submission from CogWrite Semantic Technologies`
    - Tone: `warm and professional`
    - Signature: your real signature (e.g. `Harry Layman\nCognosa`)
-4. Save.
+4. Click **Create** (the modal closes back to the workflows list).
 
 **Steps:**
-1. On the workflow's detail page, click `Run Now`.
-2. Wait until the run completes (Status: completed; should take 5–15s depending on LLM).
-3. Click `Pending replies` (orange button — only appears for type 6).
-4. Confirm one or more rows appear, each showing:
+1. From the workflows list, click the workflow's **Name** (or note its `ID` column value to find it) to open its detail page.
+2. On the workflow's detail page, click `Run Now`.
+3. Wait until the run completes (Status: completed; should take 5–15s depending on LLM).
+4. Click the orange `Pending replies (N)` button (only appears for type 6 workflows; the count badge shows how many are queued).
+5. Confirm one or more rows appear, each showing:
    - To: the form-submitter's email (their Reply-To, not `form-submission@squarespace.info`)
    - Subject: starts with `Re: `
    - Source: the original sender + subject in muted text
    - An editable body with the LLM-generated draft
-5. Edit the body — change one sentence to confirm the edit is preserved.
-6. Notice the button label changes to `Edit & Send` (because the body was modified).
-7. Click `Edit & Send`.
+6. Edit the body — change one sentence to confirm the edit is preserved.
+7. Notice the button label changes to `Edit & Send` (because the body was modified).
+8. Click `Edit & Send`.
 
 **Expected:**
 - Green success notice with `#<pending_id>: sent`.
@@ -161,16 +164,16 @@ SELECT action FROM email_auto_reply_log WHERE workflow_id=68 ORDER BY log_id DES
 **Goal:** Verify the same draft path works for iCloud — the account selector is honored, drafts land in the iCloud Drafts folder, sender is correct. Uses real Apple Card dispute notification emails as the source data so no synthetic test emails are needed.
 
 **Setup:**
-1. Confirm you have at least one unhandled Apple Card dispute notification in iCloud INBOX (sender ends `post.applecard.com`, body contains `Contact us to help resolve your dispute.`).
+1. Confirm you have at least one unhandled Apple Card dispute notification in iCloud INBOX (sender contains `post.applecard.apple`, body contains `dispute investigation`).
 2. New Workflow → `Email — Draft Reply`.
 3. Name: `S4 - Draft via iCloud (Apple Card)`.
 4. Config:
    - Account: `iCloud`
    - Mailbox: `INBOX`
-   - Sender filter: `post.applecard.com`
-   - Body contains: `Contact us to help resolve your dispute.`
+   - Sender filter: `post.applecard.apple`
+   - Body contains: `dispute investigation`
    - Signature: anything short
-5. Save.
+5. Click **Create**.
 
 **Steps:**
 1. Run Now.
@@ -179,7 +182,7 @@ SELECT action FROM email_auto_reply_log WHERE workflow_id=68 ORDER BY log_id DES
 
 **Expected:**
 - One new draft per matched message.
-- Each draft addressed to the noreply address from the Apple Card sender (e.g. `noreply@post.applecard.com` or whatever's in the From / Reply-To header).
+- Each draft addressed to the noreply address from the Apple Card sender (typically `info_noreply@post.applecard.apple`, resolved via AppleScript Reply-To since the MCP doesn't expose Reply-To directly).
 - The draft is in iCloud's Drafts folder, NOT Gmail's. (Critical — verifies `from_account` is honored in `mail_save_draft`.)
 - Sender shown is iCloud.
 - LLM-generated body is reasonable given the Apple Card content (will probably acknowledge the dispute notice in a generic-but-on-topic way).
@@ -199,16 +202,16 @@ SELECT action, source_account FROM email_auto_reply_log WHERE workflow_id=<id>;
 **Goal:** Verify the third action (Save as Draft) on the approval queue uses AppleScript to save into the right account's Drafts, without sending.
 
 **Setup:**
-1. Confirm there's an unhandled Apple Card dispute email in iCloud INBOX that hasn't already been processed by Scenario 4's workflow. (If Scenario 4 already drafted from your only candidate, submit a new dispute follow-up isn't realistic — just wait for the next Apple Card dispute notification, or run scenario 4 first against an older message and use a newer one here. The dedup log is per-workflow, so a different workflow_id will treat the same message as fresh.)
+1. Confirm there's an unhandled Apple Card dispute email in iCloud INBOX. (If Scenario 4 already covered your only candidate via dedup, that's fine — the dedup log is per-workflow_id, so this scenario's brand-new workflow will treat the same message as fresh.)
 2. New Workflow → `Email — Approve Reply`.
 3. Name: `S5 - Approve via iCloud (Apple Card)`.
 4. Config:
    - Account: `iCloud`
    - Mailbox: `INBOX`
-   - Sender filter: `post.applecard.com`
-   - Body contains: `Contact us to help resolve your dispute.`
+   - Sender filter: `post.applecard.apple`
+   - Body contains: `dispute investigation`
    - Signature: anything
-5. Save.
+5. Click **Create**.
 
 **Steps:**
 1. Run Now.
@@ -246,10 +249,10 @@ SELECT action FROM email_auto_reply_log WHERE workflow_id=<id>;
    - Account: `iCloud` (or anything)
    - Sender filter: `(empty)`
    - Body contains: `(empty)`
-4. Save.
+4. Click **Create**.
 
 **Steps:**
-1. Run Now.
+1. Open the workflow's detail page (click its Name from the list) and click `Run Now`.
 2. Open the run's Details.
 
 **Expected:**
@@ -277,16 +280,16 @@ If this scenario produces ANY drafts, that's a bug — file it before any furthe
 **Goal:** Verify the engine's per-`to_address` consolidation. When multiple matching messages share the same recipient address (typically the same form-submitter), the workflow must produce exactly ONE pending reply (or draft), addressed at the most recent message, while ALL message IDs in the group land in the dedup log so future runs skip the whole group.
 
 **Setup:**
-1. Either submit your Squarespace contact form **3 times in quick succession with the same Reply-To email** (your own test address that you don't normally use), or — easier — send 3 emails to yourself manually that each match a chosen sender_filter + body_contains pair. Make sure all three appear in the SAME inbox (iCloud or Gmail-in-Mail.app).
+1. Either submit your Squarespace contact form **3 times in quick succession with the same `Email:` field value** (i.e. same submitter, since Squarespace sets the message Reply-To from that field), or — easier — send 3 emails to yourself manually that each match a chosen sender_filter + body_contains pair. Make sure all three appear in the SAME inbox (iCloud or Gmail-in-Mail.app).
 2. New Workflow → `Email — Approve Reply` (type 6).
 3. Name: `S7 - Consolidation`.
 4. Config: filters that match all three emails. Tone/signature anything.
-5. Save.
+5. Click **Create**.
 
 **Steps:**
 1. Note the message IDs of the 3 emails ahead of time (Mail.app shows them in raw source view, or query Apple Mail MCP). Also note their dates so you know which is "latest".
-2. Run Now.
-3. Open `Pending replies`.
+2. From the workflows list, click the workflow's Name to open its detail page, then `Run Now`.
+3. Click the orange `Pending replies (N)` button.
 
 **Expected:**
 - **Exactly ONE pending reply row.** Not three.
@@ -350,5 +353,24 @@ SELECT COUNT(*) FROM pending_email_replies WHERE workflow_id=<id>;
 
 - **Mail.app must remain open** during runs that save drafts — AppleScript launches it if needed but it's faster if already running.
 - **First LLM call may take 8–15 seconds**; subsequent calls in the same run are faster due to prompt caching.
-- **Reply-To extraction** only works if the source email actually has a `Reply-To` header — otherwise it falls back to the `From` address. For Squarespace forms this is set to the submitter's email (great). For Apple Card dispute notifications it's typically a noreply address and the draft will be addressed there — fine for testing the platform mechanics, but those drafts should never actually be sent.
+- **Reply-To extraction** is now resolved via three layered paths inside the engine: (1) body-field extraction when `body_email_field` is configured (e.g. Squarespace's `Email:` line), (2) AppleScript `reply to` property for cases where the MCP's get_message doesn't expose it, (3) From-address fallback. For Squarespace forms the AppleScript path returns the submitter's email; for Apple Card it returns a noreply address and the draft will go there — fine for testing the platform mechanics, but those drafts should never actually be sent.
+- **HTML-only message bodies**: Apple Mail's scripting `content` property returns empty for messages whose only body part is HTML (no multipart text/plain alternative). The engine has a fallback that fetches the raw RFC822 source via AppleScript and parses the body out (text/plain preferred; text/html stripped to text otherwise). Squarespace sometimes sends form-submission emails as HTML-only — the fallback covers them. If a run reports `0 matched body filter` despite the message clearly containing your filter substring, the fallback may have failed; check `auto_reply_body_fallback_used` events in the uvicorn log.
 - **No iCloud-to-Gmail or vice-versa cross-account testing** — the account selected in config is also the sender. If your test email arrived in iCloud but you set the workflow to use `harry@cognosa.net`, the workflow will look in Gmail's INBOX, not iCloud's. Match account to where the test email lives.
+
+## Diagnostic features available during testing
+
+Two pieces of UI/output that tell you what the engine actually did:
+
+- **Funnel summary in Step 1's `output_summary`** — visible on the Run Detail page (click `Details` next to a run row). Reads, for example:
+  > `Scanned 50 inbox messages → 6 matched sender filter 'X' → 4 matched body filter 'Y' → 3 after grouping by recipient → 3 candidate(s) drafted`
+
+  When filters miss, this string tells you exactly which step lost the matches.
+
+- **Consolidation suffix in Step 2's `output_summary`** — when same-source consolidation fires (multiple messages folded into one reply per group), Step 2 says:
+  > `Queued 3 reply/replies for human approval. Consolidated 2 older sibling message(s).`
+
+  Absence of the "Consolidated…" suffix means each candidate was its own group (no consolidation that run).
+
+- **Pending replies button** on a type-6 workflow's detail page is solid yellow with a count badge (`Pending replies (3)`) when items are queued, and disabled-grey when empty. The button itself communicates whether there's something to review.
+
+- **Workflow ID column** on the workflows list — every workflow shows `#<id>` next to its checkbox, useful when matching test plan instructions to actual rows.
