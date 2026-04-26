@@ -165,6 +165,16 @@ async def find_and_generate_candidates(
         if not msg_id or msg_id in already:
             continue
 
+        # Cheap pre-filter on sender BEFORE the (slow) body fetch.
+        # mail_list_messages already returns sender info, so we can reject
+        # non-matching senders without paying for an MCP get_message call.
+        # If sender_filter is empty (only body_contains is set), we must
+        # fetch the body anyway, so skip the short-circuit in that case.
+        if sender_filter:
+            preview_sender = (msg.get("sender") or "") + " " + (msg.get("from") or "")
+            if sender_filter.lower() not in preview_sender.lower():
+                continue
+
         try:
             full = await mcp_client.mail_get_message(account, mailbox, int(msg_id))
         except Exception as e:
@@ -175,6 +185,10 @@ async def find_and_generate_candidates(
         source_from = full.get("sender") or msg.get("sender") or full.get("from") or ""
         source_subject = full.get("subject") or msg.get("subject") or ""
 
+        # Full filter check (covers body_contains + empty-filter safety guard).
+        # The sender check inside _matches_filters is redundant when sender_filter
+        # is set (we already short-circuited above), but keeping it keeps the
+        # function self-contained and the redundant check is microseconds.
         if not _matches_filters(msg, body, sender_filter, body_contains):
             continue
 
