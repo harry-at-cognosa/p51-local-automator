@@ -134,6 +134,52 @@ def _applescript_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
 
 
+async def mail_get_reply_to(account: str, mailbox: str, message_id: int) -> str | None:
+    """Fetch a message's Reply-To header via AppleScript.
+
+    The Apple Mail MCP's `get_message` does NOT expose reply_to in its response
+    (verified empirically — it returns ccRecipients, content, date, id, isRead,
+    sender, subject, toRecipients only). We fall back to osascript which can
+    read Mail.app's `reply to` property directly.
+
+    Returns the Reply-To address string (e.g. 'name@example.com' or
+    'Name <name@example.com>'), or None if unset/error/not present.
+    """
+    script = f'''
+tell application "Mail"
+    try
+        set theAccount to first account whose name is "{_applescript_escape(account)}"
+        set theMailbox to mailbox "{_applescript_escape(mailbox)}" of theAccount
+        set theMessage to (first message of theMailbox whose id is {int(message_id)})
+        set rt to reply to of theMessage
+        if rt is missing value then
+            return ""
+        end if
+        return rt as string
+    on error errMsg
+        return "ERROR:" & errMsg
+    end try
+end tell
+'''.strip()
+
+    def _run():
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    result = await asyncio.to_thread(_run)
+    if result.returncode != 0:
+        log.warning("mail_get_reply_to_failed", message_id=message_id, stderr=result.stderr.strip()[:200])
+        return None
+    output = result.stdout.strip()
+    if not output or output.startswith("ERROR:"):
+        return None
+    return output
+
+
 async def mail_save_draft(to: str, subject: str, body: str, from_account: str | None = None) -> dict:
     """Create an outgoing message in Mail.app and save it to that account's Drafts.
 

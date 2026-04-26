@@ -327,6 +327,19 @@ export default function WorkflowConfigForm({ typeId, config, onChange }: Props) 
         </Col>
         <Col md={12}>
           <Form.Group>
+            <Form.Label>Submitter-email body label (optional)</Form.Label>
+            <Form.Control
+              placeholder="e.g. Email:"
+              value={(config.body_email_field as string) || ""}
+              onChange={(e) => set("body_email_field", e.target.value)}
+            />
+            <Form.Text className="text-muted">
+              For form-submission emails where the sender is a no-reply transport (e.g. <code>form-submission@squarespace.info</code>), specify the body label that precedes the actual submitter's email. Squarespace puts <code>Email:&nbsp;harry@example.com</code> in the body. The engine will use that address as the reply target. Leave blank for emails with a real Reply-To header.
+            </Form.Text>
+          </Form.Group>
+        </Col>
+        <Col md={12}>
+          <Form.Group>
             <Form.Label>Reply tone</Form.Label>
             <Form.Control
               placeholder="e.g. warm and professional"

@@ -90,13 +90,70 @@ def _matches_filters(msg: dict, body: str, sender_filter: str, body_contains: st
     return True
 
 
-def _pick_reply_to(full_msg: dict, source_from: str) -> str:
-    """Prefer the Reply-To header if present; fall back to the sender."""
-    reply_to_raw = full_msg.get("reply_to") or full_msg.get("replyTo") or ""
-    address = _extract_email(reply_to_raw) if reply_to_raw else ""
-    if not address:
-        address = _extract_email(source_from)
-    return address
+def _extract_email_from_body(body: str, body_email_field: str) -> str:
+    """Find an email address on a labeled line in the body (e.g. `Email: foo@bar.com`).
+
+    `body_email_field` is the literal label to search for, case-insensitive,
+    typically followed by an email address on the same line. Squarespace forms
+    use `Email:` here. Returns the extracted address, or empty string if not
+    found.
+    """
+    if not body_email_field or not body:
+        return ""
+    pattern = re.compile(
+        rf"{re.escape(body_email_field)}\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{{2,}})",
+        re.IGNORECASE,
+    )
+    m = pattern.search(body)
+    return m.group(1) if m else ""
+
+
+async def _resolve_to_address(
+    full_msg: dict,
+    source_from: str,
+    body: str,
+    body_email_field: str,
+    account: str,
+    mailbox: str,
+    message_id: str,
+) -> str:
+    """Decide where the auto-reply should go.
+
+    Priority order — first non-empty result wins:
+      1. Body-field extraction (e.g. Squarespace's `Email:` line) — most reliable
+         for known form templates because the submitter explicitly types it
+      2. AppleScript Reply-To fetch — Mail.app exposes `reply to` even though
+         the MCP doesn't surface it in get_message
+      3. MCP `reply_to` / `replyTo` keys (future-proofing if the MCP adds them)
+      4. The From address — last resort; for transport senders like
+         form-submission@squarespace.info this is wrong, but better than nothing
+    """
+    # 1. Body-field extraction
+    if body_email_field:
+        addr = _extract_email_from_body(body, body_email_field)
+        if addr:
+            return addr
+
+    # 2. AppleScript Reply-To
+    try:
+        rt_raw = await mcp_client.mail_get_reply_to(account, mailbox, int(message_id))
+    except Exception as e:
+        log.warning("applescript_reply_to_failed", msg_id=message_id, error=str(e))
+        rt_raw = None
+    if rt_raw:
+        addr = _extract_email(rt_raw)
+        if addr:
+            return addr
+
+    # 3. MCP reply_to keys (future-proofing)
+    mcp_rt = full_msg.get("reply_to") or full_msg.get("replyTo") or ""
+    if mcp_rt:
+        addr = _extract_email(mcp_rt)
+        if addr:
+            return addr
+
+    # 4. From — last resort
+    return _extract_email(source_from)
 
 
 async def _already_handled_ids(
@@ -143,6 +200,7 @@ async def find_and_generate_candidates(
     mailbox = config.get("mailbox", "INBOX")
     sender_filter = (config.get("sender_filter") or "").strip()
     body_contains = (config.get("body_contains") or "").strip()
+    body_email_field = (config.get("body_email_field") or "").strip()
     signature = config.get("signature") or ""
     tone = config.get("tone") or "warm and professional"
     fetch_limit = int(config.get("fetch_limit") or 50)
@@ -192,7 +250,15 @@ async def find_and_generate_candidates(
         if not _matches_filters(msg, body, sender_filter, body_contains):
             continue
 
-        to_address = _pick_reply_to(full, source_from)
+        to_address = await _resolve_to_address(
+            full_msg=full,
+            source_from=source_from,
+            body=body,
+            body_email_field=body_email_field,
+            account=account,
+            mailbox=mailbox,
+            message_id=msg_id,
+        )
         if not to_address:
             log.warning("auto_reply_no_reply_to", msg_id=msg_id)
             continue
