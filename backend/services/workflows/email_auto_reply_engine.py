@@ -205,6 +205,17 @@ async def find_and_generate_candidates(
     tone = config.get("tone") or "warm and professional"
     fetch_limit = int(config.get("fetch_limit") or 50)
 
+    # Empty-filter safety guard — return immediately, do NOT touch the inbox.
+    # Without this fast-path, the loop below would still skip each message via
+    # _matches_filters, but only after paying for an MCP body fetch per message
+    # (10–30s wasted to return zero candidates).
+    if not sender_filter and not body_contains:
+        log.info(
+            "auto_reply_empty_filters_skipped",
+            workflow_id=workflow.workflow_id,
+        )
+        return []
+
     # ── Phase 1: fetch, filter, group by to_address ──────────────
     messages = await mcp_client.mail_list_messages(account, mailbox, limit=fetch_limit)
     if not messages:
