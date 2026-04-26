@@ -23,16 +23,20 @@ async def run_email_auto_reply_draft(
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger)
     config = workflow.config or {}
     from_account = config.get("account", "iCloud")
+    sender_filter = (config.get("sender_filter") or "").strip()
+    body_contains = (config.get("body_contains") or "").strip()
 
     try:
         # Step 1+2+3: fetch, filter, LLM-draft (combined inside the engine)
         step_fetch = await engine.start_step(session, run.run_id, 1, "Fetch + filter + draft")
-        candidates = await find_and_generate_candidates(session, workflow)
+        batch = await find_and_generate_candidates(session, workflow)
+        candidates = batch.candidates
         total_tokens = sum(c.llm_tokens for c in candidates)
+        funnel = batch.funnel_summary(sender_filter, body_contains)
         await engine.complete_step(
             session,
             step_fetch,
-            output_summary=f"Generated {len(candidates)} reply draft(s) for acknowledgment.",
+            output_summary=funnel,
             llm_tokens=total_tokens,
         )
 

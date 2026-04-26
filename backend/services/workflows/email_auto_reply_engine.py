@@ -52,6 +52,52 @@ class ReplyCandidate:
     additional_handled_message_ids: list[str] = field(default_factory=list)
 
 
+@dataclass
+class CandidateBatch:
+    """Result of one engine pass: candidates + funnel diagnostics.
+
+    Funnel counts let the runner build a step summary that explains where
+    matches fell off, so a "0 candidates" outcome is diagnostic instead of
+    opaque ("Generated 0 reply draft(s)" tells you nothing about *why*).
+    """
+    candidates: list[ReplyCandidate] = field(default_factory=list)
+    total_listed: int = 0           # messages returned by mail_list_messages
+    already_handled: int = 0        # in dedup log for this workflow
+    matched_sender: int = 0         # of the un-handled messages, passed sender filter
+    matched_both: int = 0           # of those, ALSO passed body filter
+    grouped_to_address_count: int = 0  # distinct to_address groups produced
+    short_circuit_reason: str = ""  # populated when we returned without scanning
+                                    # ('empty_filters' or 'no_messages')
+
+    def funnel_summary(self, sender_filter: str, body_contains: str) -> str:
+        """Human-readable funnel string for inclusion in a step's output_summary."""
+        if self.short_circuit_reason == "empty_filters":
+            return (
+                "Skipped run: both sender_filter and body_contains are empty. "
+                "Set at least one to avoid acknowledging unrelated mail."
+            )
+        if self.short_circuit_reason == "no_messages":
+            return "Inbox returned 0 messages — nothing to scan."
+
+        parts = [f"Scanned {self.total_listed} inbox messages"]
+        if self.already_handled:
+            new = self.total_listed - self.already_handled
+            parts.append(f"{new} new (skipped {self.already_handled} already-handled)")
+        if sender_filter:
+            parts.append(
+                f"{self.matched_sender} matched sender filter "
+                f"'{sender_filter}'"
+            )
+        if body_contains:
+            parts.append(
+                f"{self.matched_both} matched body filter "
+                f"'{body_contains[:40]}{'…' if len(body_contains) > 40 else ''}'"
+            )
+        parts.append(f"{self.grouped_to_address_count} after grouping by recipient")
+        parts.append(f"{len(self.candidates)} candidate(s) drafted")
+        return " → ".join(parts)
+
+
 _EMAIL_RE = re.compile(r"[\w.+\-]+@[\w\-]+\.[\w.\-]+")
 
 # Apple Mail's default date format, e.g. "Wednesday, April 15, 2026 at 4:11:39 PM"
@@ -174,7 +220,7 @@ async def find_and_generate_candidates(
     session: AsyncSession,
     workflow: UserWorkflows,
     max_candidates: int = 20,
-) -> list[ReplyCandidate]:
+) -> CandidateBatch:
     """Fetch, filter, group-by-to_address, pick latest-per-group, LLM-draft.
 
     Two-phase to avoid wasted LLM calls when multiple messages from the same
@@ -188,8 +234,10 @@ async def find_and_generate_candidates(
       Date header. Run the LLM only for that one. Attach the older siblings'
       message IDs to the candidate so the runner can log dedup rows for them.
 
-    Returns zero or more ReplyCandidate objects ready for the caller's
-    terminal action (draft-save, queue for approval, or direct send).
+    Returns a CandidateBatch carrying both the candidates AND funnel counts
+    so the runner can produce a diagnostic step summary like "Scanned 50 →
+    47 new → 0 matched sender filter 'foo' → no candidates" instead of
+    the opaque "Generated 0 reply draft(s)".
 
     Does NOT write the dedup log — caller writes it only when the terminal
     action succeeds. Caller MUST log both source_message_id AND each entry
@@ -205,25 +253,31 @@ async def find_and_generate_candidates(
     tone = config.get("tone") or "warm and professional"
     fetch_limit = int(config.get("fetch_limit") or 50)
 
+    batch = CandidateBatch()
+
     # Empty-filter safety guard — return immediately, do NOT touch the inbox.
     # Without this fast-path, the loop below would still skip each message via
     # _matches_filters, but only after paying for an MCP body fetch per message
     # (10–30s wasted to return zero candidates).
     if not sender_filter and not body_contains:
+        batch.short_circuit_reason = "empty_filters"
         log.info(
             "auto_reply_empty_filters_skipped",
             workflow_id=workflow.workflow_id,
         )
-        return []
+        return batch
 
     # ── Phase 1: fetch, filter, group by to_address ──────────────
     messages = await mcp_client.mail_list_messages(account, mailbox, limit=fetch_limit)
+    batch.total_listed = len(messages)
     if not messages:
+        batch.short_circuit_reason = "no_messages"
         log.info("auto_reply_no_messages", workflow_id=workflow.workflow_id)
-        return []
+        return batch
 
     ids = [str(m.get("id")) for m in messages if m.get("id") is not None]
     already = await _already_handled_ids(session, workflow.workflow_id, ids)
+    batch.already_handled = len(already)
 
     # Per-to_address bucket. Each item is a dict carrying everything the
     # phase-2 winner-picker and LLM-call need.
@@ -243,6 +297,9 @@ async def find_and_generate_candidates(
             preview_sender = (msg.get("sender") or "") + " " + (msg.get("from") or "")
             if sender_filter.lower() not in preview_sender.lower():
                 continue
+        # Counts as "matched_sender" if we got past this check (or sender_filter
+        # was empty so vacuously passed).
+        batch.matched_sender += 1
 
         try:
             full = await mcp_client.mail_get_message(account, mailbox, int(msg_id))
@@ -255,11 +312,9 @@ async def find_and_generate_candidates(
         source_subject = full.get("subject") or msg.get("subject") or ""
 
         # Full filter check (covers body_contains + empty-filter safety guard).
-        # The sender check inside _matches_filters is redundant when sender_filter
-        # is set (we already short-circuited above), but keeping it keeps the
-        # function self-contained and the redundant check is microseconds.
         if not _matches_filters(msg, body, sender_filter, body_contains):
             continue
+        batch.matched_both += 1
 
         to_address = await _resolve_to_address(
             full_msg=full,
@@ -285,8 +340,9 @@ async def find_and_generate_candidates(
             "date": parsed_date,
         })
 
+    batch.grouped_to_address_count = len(grouped)
     if not grouped:
-        return []
+        return batch
 
     # ── Phase 2: pick latest per group, LLM-generate only the winners ──
     candidates: list[ReplyCandidate] = []
@@ -354,4 +410,5 @@ async def find_and_generate_candidates(
         if len(candidates) >= max_candidates:
             break
 
-    return candidates
+    batch.candidates = candidates
+    return batch

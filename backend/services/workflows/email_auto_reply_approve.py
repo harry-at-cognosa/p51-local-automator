@@ -31,16 +31,21 @@ async def run_email_auto_reply_approve(
     trigger: str = "manual",
 ) -> WorkflowRuns:
     run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger)
+    config = workflow.config or {}
+    sender_filter = (config.get("sender_filter") or "").strip()
+    body_contains = (config.get("body_contains") or "").strip()
 
     try:
         # Step 1: fetch + filter + LLM-draft
         step_fetch = await engine.start_step(session, run.run_id, 1, "Fetch + filter + draft")
-        candidates = await find_and_generate_candidates(session, workflow)
+        batch = await find_and_generate_candidates(session, workflow)
+        candidates = batch.candidates
         total_tokens = sum(c.llm_tokens for c in candidates)
+        funnel = batch.funnel_summary(sender_filter, body_contains)
         await engine.complete_step(
             session,
             step_fetch,
-            output_summary=f"Drafted {len(candidates)} reply/replies for review.",
+            output_summary=funnel,
             llm_tokens=total_tokens,
         )
 
