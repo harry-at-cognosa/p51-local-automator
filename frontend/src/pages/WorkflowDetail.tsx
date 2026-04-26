@@ -46,9 +46,22 @@ export default function WorkflowDetail() {
   const [editName, setEditName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState("");
+  const [pendingCount, setPendingCount] = useState<number | null>(null);
 
   const fetchData = () => {
-    axiosClient.get(`/workflows/${id}`).then((res) => setWorkflow(res.data));
+    axiosClient.get(`/workflows/${id}`).then((res) => {
+      setWorkflow(res.data);
+      // Only type-6 (Approve Before Send) workflows have a pending queue.
+      // Fetch count to drive the Pending-replies button's appearance.
+      if (res.data?.type_id === 6) {
+        axiosClient
+          .get(`/workflows/${id}/pending-replies`)
+          .then((r) => setPendingCount(Array.isArray(r.data) ? r.data.length : 0))
+          .catch(() => setPendingCount(0));
+      } else {
+        setPendingCount(null);
+      }
+    });
     axiosClient.get(`/workflows/${id}/runs`).then((res) => setRuns(res.data));
   };
 
@@ -139,11 +152,21 @@ export default function WorkflowDetail() {
         <div className="d-flex gap-2">
           {workflow.type_id === 6 && (
             <Button
-              variant="outline-warning"
+              variant={pendingCount && pendingCount > 0 ? "warning" : "outline-secondary"}
+              disabled={pendingCount === 0}
               onClick={() => navigate(`/app/workflows/${id}/pending-replies`)}
-              title="Review auto-generated replies awaiting your approval"
+              title={
+                pendingCount === null
+                  ? "Loading…"
+                  : pendingCount === 0
+                    ? "No pending replies — run the workflow to queue new candidates"
+                    : `${pendingCount} pending reply/replies awaiting your approval`
+              }
             >
               Pending replies
+              {pendingCount !== null && pendingCount > 0 && (
+                <Badge bg="dark" className="ms-2">{pendingCount}</Badge>
+              )}
             </Button>
           )}
           <Button
@@ -248,8 +271,7 @@ export default function WorkflowDetail() {
                             <Button
                               size="sm"
                               variant="outline-primary"
-                              disabled={r.artifact_count === 0}
-                              title={r.artifact_count === 0 ? "No output for this run" : undefined}
+                              title={r.artifact_count === 0 ? "Step + status info; no file artifacts produced" : `${r.artifact_count} artifact(s)`}
                               onClick={() => navigate(`/app/runs/${r.run_id}`)}
                             >
                               Details
