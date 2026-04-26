@@ -122,7 +122,12 @@ def detect_amount_columns(df: pd.DataFrame) -> list[str]:
 
 
 def detect_category_columns(df: pd.DataFrame) -> list[str]:
-    """Find categorical columns useful for grouping."""
+    """Find categorical columns useful for grouping.
+
+    Cap at 500 uniques: downstream summaries take the top-N. The lower 50-uniques
+    cap was too aggressive — a column literally named ``Category`` with 248
+    distinct values is a genuine grouping column, not noise.
+    """
     cat_keywords = ["category", "type", "channel", "status", "account", "group",
                     "class", "department", "condition"]
     result = []
@@ -130,7 +135,7 @@ def detect_category_columns(df: pd.DataFrame) -> list[str]:
         col_lower = col.lower().replace("_", " ")
         if any(kw in col_lower for kw in cat_keywords):
             nunique = df[col].nunique()
-            if 2 <= nunique <= 50:
+            if 2 <= nunique <= 500:
                 result.append(col)
     return result
 
