@@ -138,6 +138,7 @@ export default function Workflows() {
             <thead>
               <tr>
                 <th style={{ width: 36 }}></th>
+                <th style={{ width: 56 }}>ID</th>
                 <th>Category</th>
                 <th>Type</th>
                 <th>Name <span className="text-muted fw-normal small">(click to review)</span></th>
@@ -145,6 +146,7 @@ export default function Workflows() {
                 <th>Last Run</th>
               </tr>
               <tr className="table-light">
+                <th></th>
                 <th></th>
                 <th>
                   <Form.Select
@@ -221,6 +223,7 @@ export default function Workflows() {
                         onChange={() => toggleSelected(w.workflow_id)}
                       />
                     </td>
+                    <td className="text-muted small font-monospace">#{w.workflow_id}</td>
                     <td title={w.type.category.long_name}>{w.type.category.short_name}</td>
                     <td title={`${w.type.long_name}${w.type.type_desc ? " — " + w.type.type_desc : ""}`}>
                       {w.type.short_name}
@@ -250,7 +253,7 @@ export default function Workflows() {
               })}
               {pageItems.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="text-center text-muted py-3">
+                  <td colSpan={7} className="text-center text-muted py-3">
                     No workflows match the current filters.{" "}
                     <Button variant="link" size="sm" onClick={() => { clearSelection(); useWorkflowsStore.getState().resetFilters(); }}>
                       Clear filters

@@ -7,6 +7,7 @@ import axiosClient from "../api/axiosClient";
 interface WorkflowRun {
   run_id: number;
   workflow_id: number;
+  workflow_name: string;
   status: string;
   current_step: number;
   total_steps: number;
@@ -90,6 +91,18 @@ export default function RunDetail() {
 
       <div className="d-flex justify-content-between align-items-start mb-4">
         <div>
+          <div className="text-muted small mb-1">
+            Workflow{" "}
+            <Button
+              variant="link"
+              size="sm"
+              className="p-0 align-baseline text-decoration-none"
+              onClick={() => navigate(`/app/workflows/${run.workflow_id}`)}
+            >
+              #{run.workflow_id}
+              {run.workflow_name && <> — {run.workflow_name}</>}
+            </Button>
+          </div>
           <h3>Run #{run.run_id} <StatusBadge status={run.status} /></h3>
           <p className="text-muted mb-0">
             {new Date(run.started_at).toLocaleString()}

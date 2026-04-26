@@ -266,7 +266,7 @@ async def list_runs(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
-    await _get_active_workflow(session, workflow_id, user)
+    workflow = await _get_active_workflow(session, workflow_id, user)
 
     artifact_counts = (
         select(
@@ -295,6 +295,7 @@ async def list_runs(
             WorkflowRunRead(
                 run_id=run.run_id,
                 workflow_id=run.workflow_id,
+                workflow_name=workflow.name,
                 status=run.status,
                 current_step=run.current_step,
                 total_steps=run.total_steps,
@@ -380,7 +381,24 @@ async def get_run(
     workflow = await session.get(UserWorkflows, run.workflow_id)
     if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
         raise HTTPException(status_code=404, detail="Run not found")
-    return run
+
+    artifact_count = await session.scalar(
+        select(func.count(WorkflowArtifacts.artifact_id)).where(WorkflowArtifacts.run_id == run_id)
+    )
+
+    return WorkflowRunRead(
+        run_id=run.run_id,
+        workflow_id=run.workflow_id,
+        workflow_name=workflow.name,
+        status=run.status,
+        current_step=run.current_step,
+        total_steps=run.total_steps,
+        trigger=run.trigger,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        error_detail=run.error_detail,
+        artifact_count=int(artifact_count or 0),
+    )
 
 
 @router_workflows.get("/runs/{run_id}/steps", response_model=list[WorkflowStepRead])

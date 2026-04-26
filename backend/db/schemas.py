@@ -199,6 +199,7 @@ class BulkDeleteRequest(BaseModel):
 class WorkflowRunRead(BaseModel):
     run_id: int
     workflow_id: int
+    workflow_name: str = ""
     status: str
     current_step: int
     total_steps: int
