@@ -16,9 +16,13 @@ or send directly) is the caller's responsibility. Callers MUST also write
 dedup-log rows for both the chosen source_message_id AND every entry in
 additional_handled_message_ids so the whole group is marked handled.
 """
+import email
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.policy import default as email_default_policy
+from html.parser import HTMLParser
+from io import StringIO
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +32,87 @@ from backend.services import llm_service, mcp_client
 from backend.services.logger_service import get_logger
 
 log = get_logger("email_auto_reply")
+
+
+class _HTMLToText(HTMLParser):
+    """Minimal HTML→text stripper for HTML-only email bodies.
+
+    Used as a fallback when an email has no text/plain part. Sufficient for
+    parsing recognizable form-submission templates where the relevant fields
+    (Name, Email, Message) appear as inline text inside simple HTML tags.
+    """
+    BLOCK_TAGS = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self):
+        super().__init__()
+        self._buf = StringIO()
+
+    def handle_data(self, data: str):
+        self._buf.write(data)
+
+    def handle_starttag(self, tag: str, attrs):
+        if tag == "br":
+            self._buf.write("\n")
+
+    def handle_endtag(self, tag: str):
+        if tag in self.BLOCK_TAGS:
+            self._buf.write("\n")
+
+    def get_text(self) -> str:
+        # Collapse runs of blank lines and trim whitespace per line.
+        raw = self._buf.getvalue()
+        lines = [ln.strip() for ln in raw.splitlines()]
+        out: list[str] = []
+        for ln in lines:
+            if ln or (out and out[-1]):
+                out.append(ln)
+        return "\n".join(out).strip()
+
+
+async def _fetch_body_fallback(account: str, mailbox: str, message_id: str) -> str:
+    """Last-resort body fetch via raw RFC822 source.
+
+    Mail.app's `content` scripting property returns empty for HTML-only
+    messages. The MCP `get_message` inherits the same blind spot. When the
+    primary content is empty, we pull the raw source and parse the body out:
+      - prefer text/plain
+      - fall back to text/html, stripped to plain text
+    Returns "" if no body could be extracted.
+    """
+    try:
+        source = await mcp_client.mail_get_message_source(account, mailbox, int(message_id))
+    except Exception as e:
+        log.warning("mail_get_message_source_exc", msg_id=message_id, error=str(e))
+        return ""
+    if not source:
+        return ""
+
+    try:
+        msg = email.message_from_string(source, policy=email_default_policy)
+    except Exception as e:
+        log.warning("rfc822_parse_failed", msg_id=message_id, error=str(e))
+        return ""
+
+    body_part = msg.get_body(preferencelist=("plain", "html"))
+    if body_part is None:
+        return ""
+
+    try:
+        content = body_part.get_content()
+    except Exception as e:
+        log.warning("rfc822_get_content_failed", msg_id=message_id, error=str(e))
+        return ""
+
+    if body_part.get_content_type() == "text/html":
+        stripper = _HTMLToText()
+        try:
+            stripper.feed(content)
+        except Exception as e:
+            log.warning("html_strip_failed", msg_id=message_id, error=str(e))
+            return content  # return raw HTML rather than nothing
+        return stripper.get_text()
+
+    return content or ""
 
 
 @dataclass
@@ -308,6 +393,14 @@ async def find_and_generate_candidates(
             continue
 
         body = full.get("body") or full.get("content") or ""
+        # Mail.app's `content` scripting property returns empty for HTML-only
+        # messages (no multipart text/plain alternative). When that happens,
+        # fall back to RFC822 source + parser.
+        if not body.strip():
+            body = await _fetch_body_fallback(account, mailbox, msg_id)
+            if body:
+                log.info("auto_reply_body_fallback_used", msg_id=msg_id, length=len(body))
+
         source_from = full.get("sender") or msg.get("sender") or full.get("from") or ""
         source_subject = full.get("subject") or msg.get("subject") or ""
 

@@ -134,6 +134,45 @@ def _applescript_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
 
 
+async def mail_get_message_source(account: str, mailbox: str, message_id: int) -> str | None:
+    """Fetch a message's raw RFC822 source via AppleScript.
+
+    Required because Mail.app's `content` scripting property returns empty
+    for HTML-only messages (those without a multipart text/plain alternative).
+    The MCP wrapper around `content` inherits the same blind spot. The raw
+    source is always available — callers parse the body out themselves.
+    """
+    script = f'''
+tell application "Mail"
+    try
+        set theAccount to first account whose name is "{_applescript_escape(account)}"
+        set theMailbox to mailbox "{_applescript_escape(mailbox)}" of theAccount
+        set theMessage to (first message of theMailbox whose id is {int(message_id)})
+        return source of theMessage
+    on error errMsg
+        return "ERROR:" & errMsg
+    end try
+end tell
+'''.strip()
+
+    def _run():
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+    result = await asyncio.to_thread(_run)
+    if result.returncode != 0:
+        log.warning("mail_get_message_source_failed", message_id=message_id, stderr=result.stderr.strip()[:200])
+        return None
+    output = result.stdout
+    if not output.strip() or output.startswith("ERROR:"):
+        return None
+    return output
+
+
 async def mail_get_reply_to(account: str, mailbox: str, message_id: int) -> str | None:
     """Fetch a message's Reply-To header via AppleScript.
 
