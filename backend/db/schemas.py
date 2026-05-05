@@ -141,6 +141,24 @@ class WorkflowTypeRead(BaseModel):
         from_attributes = True
 
 
+class WorkflowCategoryUpdate(BaseModel):
+    """Editable fields on workflow_categories. ID and category_key are immutable."""
+    short_name: str | None = None
+    long_name: str | None = None
+    sort_order: int | None = None
+    enabled: bool | None = None
+
+
+class WorkflowTypeUpdate(BaseModel):
+    """Editable fields on workflow_types. ID, type_name, and category are immutable."""
+    short_name: str | None = None
+    long_name: str | None = None
+    type_desc: str | None = None
+    default_config: dict | None = None
+    required_services: list | dict | None = None
+    enabled: bool | None = None
+
+
 class UserWorkflowCreate(BaseModel):
     type_id: int
     name: str

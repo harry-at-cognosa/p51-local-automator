@@ -20,7 +20,9 @@ from backend.db.models import (
 )
 from backend.db.schemas import (
     WorkflowCategoryRead,
+    WorkflowCategoryUpdate,
     WorkflowTypeRead,
+    WorkflowTypeUpdate,
     UserWorkflowCreate,
     UserWorkflowRead,
     UserWorkflowListRead,
@@ -69,6 +71,80 @@ async def list_workflow_types(
         .order_by(WorkflowTypes.type_id)
     )
     return result.scalars().all()
+
+
+# ── Catalog admin (superuser-only edits to categories/types) ─
+
+
+def _require_superuser(user: User) -> None:
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superuser access required")
+
+
+@router_workflows.get("/admin/workflow-categories", response_model=list[WorkflowCategoryRead])
+async def admin_list_workflow_categories(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """List ALL categories (including disabled) for the admin CRUD page."""
+    _require_superuser(user)
+    result = await session.execute(
+        select(WorkflowCategories).order_by(WorkflowCategories.sort_order, WorkflowCategories.category_id)
+    )
+    return result.scalars().all()
+
+
+@router_workflows.patch("/admin/workflow-categories/{category_id}", response_model=WorkflowCategoryRead)
+async def admin_update_workflow_category(
+    category_id: int,
+    body: WorkflowCategoryUpdate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    _require_superuser(user)
+    category = await session.get(WorkflowCategories, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(category, field, value)
+    await session.commit()
+    await session.refresh(category)
+    return category
+
+
+@router_workflows.get("/admin/workflow-types", response_model=list[WorkflowTypeRead])
+async def admin_list_workflow_types(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """List ALL types (including disabled) for the admin CRUD page."""
+    _require_superuser(user)
+    result = await session.execute(
+        select(WorkflowTypes)
+        .options(selectinload(WorkflowTypes.category))
+        .order_by(WorkflowTypes.type_id)
+    )
+    return result.scalars().all()
+
+
+@router_workflows.patch("/admin/workflow-types/{type_id}", response_model=WorkflowTypeRead)
+async def admin_update_workflow_type(
+    type_id: int,
+    body: WorkflowTypeUpdate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    _require_superuser(user)
+    wf_type = await session.get(WorkflowTypes, type_id)
+    if not wf_type:
+        raise HTTPException(status_code=404, detail="Workflow type not found")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(wf_type, field, value)
+    await session.commit()
+    await session.refresh(wf_type, attribute_names=["category"])
+    return wf_type
 
 
 # ── User Workflows (configured instances) ────────────────────
