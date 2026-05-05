@@ -30,7 +30,7 @@ async def run_email_auto_reply_approve(
     workflow: UserWorkflows,
     trigger: str = "manual",
 ) -> WorkflowRuns:
-    run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger)
+    run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
     config = workflow.config or {}
     sender_filter = (config.get("sender_filter") or "").strip()
     body_contains = (config.get("body_contains") or "").strip()

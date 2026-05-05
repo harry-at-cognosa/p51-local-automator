@@ -31,14 +31,21 @@ async def create_run(
     workflow_id: int,
     total_steps: int,
     trigger: str = "manual",
+    config: dict | None = None,
 ) -> WorkflowRuns:
-    """Create a new workflow run record."""
+    """Create a new workflow run record.
+
+    `config` should be the user_workflows.config in effect at run start.
+    Stored verbatim in workflow_runs.config_snapshot so later edits to the
+    workflow's config don't obscure what an earlier run actually used.
+    """
     run = WorkflowRuns(
         workflow_id=workflow_id,
         status="running",
         current_step=0,
         total_steps=total_steps,
         trigger=trigger,
+        config_snapshot=config,
     )
     session.add(run)
     await session.flush()

@@ -51,16 +51,16 @@ async def run_sql_runner(
     query_name = config.get("query_name", "query")
 
     if not connection_string or not query:
-        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger)
+        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
         await engine.fail_run(session, run, "Missing connection_string or query in config")
         return run
 
     if not validate_readonly(query):
-        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger)
+        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
         await engine.fail_run(session, run, "Query rejected: only SELECT/WITH/EXPLAIN queries are allowed")
         return run
 
-    run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger)
+    run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
     output_dir = engine.get_run_output_dir(workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
     try:

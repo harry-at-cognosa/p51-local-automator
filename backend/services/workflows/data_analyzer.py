@@ -57,15 +57,15 @@ async def run_data_analyzer(
     config = workflow.config or {}
     file_path = config.get("file_path", "")
     if not file_path:
-        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger)
+        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
         await engine.fail_run(session, run, "Missing 'file_path' in workflow config")
         return run
     if not os.path.exists(file_path):
-        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger)
+        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
         await engine.fail_run(session, run, f"Data file not found: {file_path}")
         return run
 
-    run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger)
+    run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
     output_dir = engine.get_run_output_dir(workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
     try:

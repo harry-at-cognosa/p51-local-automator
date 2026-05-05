@@ -208,6 +208,7 @@ class WorkflowRunRead(BaseModel):
     completed_at: datetime | None
     error_detail: str | None
     artifact_count: int = 0
+    config_snapshot: dict | None = None
 
     class Config:
         from_attributes = True

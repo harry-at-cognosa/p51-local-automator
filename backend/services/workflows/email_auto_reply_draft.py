@@ -20,7 +20,7 @@ async def run_email_auto_reply_draft(
     workflow: UserWorkflows,
     trigger: str = "manual",
 ) -> WorkflowRuns:
-    run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger)
+    run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger, config=workflow.config)
     config = workflow.config or {}
     from_account = config.get("account", "iCloud")
     sender_filter = (config.get("sender_filter") or "").strip()
