@@ -10,6 +10,7 @@ import PendingReplies from "./pages/PendingReplies";
 import ManageUsers from "./pages/ManageUsers";
 import ManageGroups from "./pages/ManageGroups";
 import ManageWorkflowCategories from "./pages/ManageWorkflowCategories";
+import ManageWorkflowTypes from "./pages/ManageWorkflowTypes";
 import Settings from "./pages/Settings";
 import GroupSettings from "./pages/GroupSettings";
 
@@ -49,6 +50,10 @@ export const Router = createBrowserRouter([
       {
         path: "admin/workflow-categories",
         element: <ManageWorkflowCategories />,
+      },
+      {
+        path: "admin/workflow-types",
+        element: <ManageWorkflowTypes />,
       },
       {
         path: "admin/settings",
