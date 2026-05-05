@@ -25,3 +25,6 @@ data/
 .LSOverride
 .apdisk
 20000
+
+# Microsoft Office lock files (created while a document is open, removed on close)
+~$*
