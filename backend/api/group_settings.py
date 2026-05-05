@@ -1,5 +1,11 @@
-"""Group settings API — per-group key/value config for groupadmin+."""
-from fastapi import APIRouter, Depends, HTTPException
+"""Group settings API — per-group key/value config for groupadmin+.
+
+Scoping:
+  - Groupadmins see and edit only their own group's settings.
+  - Superusers may target any group via ?group_id=N. Without the param,
+    they default to their own group, same as a groupadmin.
+"""
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,15 +34,27 @@ def _require_groupadmin(user: User):
         raise HTTPException(status_code=403, detail="Group admin required")
 
 
+def _resolve_group_id(user: User, requested: int | None) -> int:
+    """Return the group_id to operate on, or 403 if a non-superuser
+    tries to address a group other than their own."""
+    if requested is None or requested == user.group_id:
+        return user.group_id
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot access other groups' settings")
+    return requested
+
+
 @router_group_settings.get("", response_model=list[GroupSettingOut])
 async def list_group_settings(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
+    group_id: int | None = Query(None),
 ):
     _require_groupadmin(user)
+    target = _resolve_group_id(user, group_id)
     result = await session.execute(
         select(GroupSettings)
-        .where(GroupSettings.group_id == user.group_id)
+        .where(GroupSettings.group_id == target)
         .order_by(GroupSettings.name)
     )
     return result.scalars().all()
@@ -48,11 +66,13 @@ async def upsert_group_setting(
     payload: GroupSettingUpdate,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
+    group_id: int | None = Query(None),
 ):
     _require_groupadmin(user)
+    target = _resolve_group_id(user, group_id)
     result = await session.execute(
         select(GroupSettings).where(
-            GroupSettings.group_id == user.group_id,
+            GroupSettings.group_id == target,
             GroupSettings.name == name,
         )
     )
@@ -60,7 +80,7 @@ async def upsert_group_setting(
     if setting:
         setting.value = payload.value
     else:
-        session.add(GroupSettings(group_id=user.group_id, name=name, value=payload.value))
+        session.add(GroupSettings(group_id=target, name=name, value=payload.value))
     await session.commit()
     return GroupSettingOut(name=name, value=payload.value)
 
@@ -70,11 +90,13 @@ async def delete_group_setting(
     name: str,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
+    group_id: int | None = Query(None),
 ):
     _require_groupadmin(user)
+    target = _resolve_group_id(user, group_id)
     result = await session.execute(
         select(GroupSettings).where(
-            GroupSettings.group_id == user.group_id,
+            GroupSettings.group_id == target,
             GroupSettings.name == name,
         )
     )

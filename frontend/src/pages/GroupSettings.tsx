@@ -8,6 +8,12 @@ interface GroupSetting {
   value: string;
 }
 
+interface GroupSummary {
+  group_id: number;
+  group_name: string;
+  is_active: boolean;
+}
+
 export default function GroupSettings() {
   const [settings, setSettings] = useState<GroupSetting[]>([]);
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -16,13 +22,30 @@ export default function GroupSettings() {
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const { group_name } = useAuthStore();
+  const { group_id, group_name, is_superuser } = useAuthStore();
+
+  // For superusers: list of all groups + currently-selected target.
+  // For non-superusers: locked to their own group.
+  const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [targetGroupId, setTargetGroupId] = useState<number>(group_id ?? 0);
+  const targetGroupName = is_superuser
+    ? groups.find((g) => g.group_id === targetGroupId)?.group_name ?? group_name
+    : group_name;
+
+  const isOtherGroup = is_superuser && targetGroupId !== group_id;
+  const groupQuery = isOtherGroup ? `?group_id=${targetGroupId}` : "";
 
   const fetchSettings = () => {
-    axiosClient.get("/group-settings").then((res) => setSettings(res.data));
+    axiosClient.get(`/group-settings${groupQuery}`).then((res) => setSettings(res.data));
   };
 
-  useEffect(() => { fetchSettings(); }, []);
+  useEffect(() => {
+    if (is_superuser) {
+      axiosClient.get("/manage/groups").then((res) => setGroups(res.data));
+    }
+  }, [is_superuser]);
+
+  useEffect(() => { fetchSettings(); }, [targetGroupId]);
 
   const startEdit = (s: GroupSetting) => {
     setEditingName(s.name);
@@ -31,14 +54,14 @@ export default function GroupSettings() {
 
   const saveEdit = async () => {
     if (!editingName) return;
-    await axiosClient.put(`/group-settings/${editingName}`, { value: editValue });
+    await axiosClient.put(`/group-settings/${editingName}${groupQuery}`, { value: editValue });
     setEditingName(null);
     fetchSettings();
   };
 
   const handleAdd = async (e: FormEvent) => {
     e.preventDefault();
-    await axiosClient.put(`/group-settings/${newName}`, { value: newValue });
+    await axiosClient.put(`/group-settings/${newName}${groupQuery}`, { value: newValue });
     setShowAdd(false);
     setNewName("");
     setNewValue("");
@@ -47,7 +70,7 @@ export default function GroupSettings() {
 
   const handleDelete = async (name: string) => {
     if (!confirm(`Delete group setting "${name}"?`)) return;
-    await axiosClient.delete(`/group-settings/${name}`);
+    await axiosClient.delete(`/group-settings/${name}${groupQuery}`);
     fetchSettings();
   };
 
@@ -89,9 +112,31 @@ export default function GroupSettings() {
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h3 className="mb-0">Group Settings</h3>
-          <small className="text-muted">Settings for: {group_name}</small>
+          <small className="text-muted">
+            Settings for: <strong>{targetGroupName}</strong>
+            {isOtherGroup && (
+              <span className="text-warning ms-2">(superuser — editing another group)</span>
+            )}
+          </small>
         </div>
-        <Button variant="primary" onClick={() => setShowAdd(true)}>+ Add Setting</Button>
+        <div className="d-flex gap-2 align-items-center">
+          {is_superuser && groups.length > 0 && (
+            <Form.Select
+              value={targetGroupId}
+              onChange={(e) => setTargetGroupId(Number(e.target.value))}
+              style={{ width: "auto" }}
+              size="sm"
+            >
+              {groups.map((g) => (
+                <option key={g.group_id} value={g.group_id}>
+                  #{g.group_id} {g.group_name}
+                  {g.group_id === group_id ? " (your group)" : ""}
+                </option>
+              ))}
+            </Form.Select>
+          )}
+          <Button variant="primary" onClick={() => setShowAdd(true)}>+ Add Setting</Button>
+        </div>
       </div>
 
       {settings.length === 0 ? (
