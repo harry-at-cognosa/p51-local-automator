@@ -35,7 +35,7 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 
 ## Admin
 
-- **CRUD pages for workflow_categories and workflow_types** — read-only for ID and key fields; editable for short_name, long_name, sort_order, type_desc, default_config, required_services, enabled. No add. Possibly no delete (use enabled toggle). Gated to superuser.
+- ~~**CRUD pages for workflow_categories and workflow_types**~~ — **shipped 2026-05-05** in Phase 3 (commits `phase 3.1`, `phase 3.2`, `phase 3.3`). Superuser-only pages at `/app/admin/workflow-categories` and `/app/admin/workflow-types`. No Add (new rows ship via Alembic migrations). No Delete (use the enabled toggle).
 
 ## Smaller fixes / cleanups
 
