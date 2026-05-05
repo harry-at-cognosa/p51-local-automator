@@ -219,13 +219,48 @@ async def _get_active_workflow(session: AsyncSession, workflow_id: int, user: Us
     return workflow
 
 
+async def _load_workflow_with_type(session: AsyncSession, workflow_id: int, user: User) -> UserWorkflows:
+    """Same access guard as _get_active_workflow but eager-loads the type+category."""
+    result = await session.execute(
+        select(UserWorkflows)
+        .options(selectinload(UserWorkflows.workflow_type).selectinload(WorkflowTypes.category))
+        .where(UserWorkflows.workflow_id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+    if (
+        not workflow
+        or workflow.group_id != user.group_id
+        or workflow.deleted != 0
+    ):
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return workflow
+
+
+def _serialize_workflow(workflow: UserWorkflows) -> UserWorkflowRead:
+    """Serialize a UserWorkflows (with eager-loaded workflow_type) into the read schema."""
+    return UserWorkflowRead(
+        workflow_id=workflow.workflow_id,
+        user_id=workflow.user_id,
+        group_id=workflow.group_id,
+        type_id=workflow.type_id,
+        name=workflow.name,
+        config=workflow.config,
+        schedule=workflow.schedule,
+        enabled=workflow.enabled,
+        last_run_at=workflow.last_run_at,
+        created_at=workflow.created_at,
+        type=WorkflowTypeRead.model_validate(workflow.workflow_type) if workflow.workflow_type else None,
+    )
+
+
 @router_workflows.get("/workflows/{workflow_id}", response_model=UserWorkflowRead)
 async def get_workflow(
     workflow_id: int,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
-    return await _get_active_workflow(session, workflow_id, user)
+    workflow = await _load_workflow_with_type(session, workflow_id, user)
+    return _serialize_workflow(workflow)
 
 
 @router_workflows.put("/workflows/{workflow_id}", response_model=UserWorkflowRead)
@@ -235,14 +270,14 @@ async def update_workflow(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
-    workflow = await _get_active_workflow(session, workflow_id, user)
+    workflow = await _load_workflow_with_type(session, workflow_id, user)
 
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(workflow, field, value)
 
     await session.commit()
-    await session.refresh(workflow)
-    return workflow
+    await session.refresh(workflow, attribute_names=["workflow_type"])
+    return _serialize_workflow(workflow)
 
 
 @router_workflows.delete("/workflows/{workflow_id}")

@@ -1,12 +1,25 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-  Container, Row, Col, Card, Button, Badge, Table, Alert, Spinner,
+  Container, Card, Button, Badge, Table, Alert, Spinner,
   Modal, Form,
 } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
+
+interface WorkflowCategoryNested {
+  category_id: number;
+  short_name: string;
+  long_name: string;
+}
+
+interface WorkflowTypeNested {
+  type_id: number;
+  short_name: string;
+  long_name: string;
+  category: WorkflowCategoryNested;
+}
 
 interface UserWorkflow {
   workflow_id: number;
@@ -19,6 +32,7 @@ interface UserWorkflow {
   enabled: boolean;
   last_run_at: string | null;
   created_at: string;
+  type: WorkflowTypeNested | null;
 }
 
 interface WorkflowRun {
@@ -116,13 +130,28 @@ export default function WorkflowDetail() {
     <Container fluid className="p-4">
       <div className="d-flex justify-content-between align-items-start mb-4">
         <div>
+          <div className="text-muted small mb-1" style={{ fontSize: "0.85rem" }}>
+            {workflow.type ? (
+              <>
+                <strong>Category:</strong> {workflow.type.category.short_name}
+                {" "}&middot;{" "}
+                <strong>Type:</strong> {workflow.type.short_name}
+                {" "}&middot;{" "}
+              </>
+            ) : null}
+            <strong>Created</strong> {new Date(workflow.created_at).toLocaleDateString()}
+            {workflow.last_run_at && (
+              <> &middot; <strong>Last run</strong> {new Date(workflow.last_run_at).toLocaleString()}</>
+            )}
+          </div>
           {editingName ? (
-            <div className="d-flex gap-2 align-items-center mb-1">
+            <div className="d-flex gap-2 align-items-center">
+              <span className="text-muted small">User Workflow Name:</span>
               <Form.Control
                 value={nameValue}
                 onChange={(e) => setNameValue(e.target.value)}
                 autoFocus
-                style={{ fontSize: "1.4rem", fontWeight: "bold", width: 400 }}
+                style={{ fontSize: "1rem", width: 400 }}
                 onKeyDown={async (e) => {
                   if (e.key === "Enter") {
                     await axiosClient.put(`/workflows/${id}`, { name: nameValue });
@@ -140,14 +169,15 @@ export default function WorkflowDetail() {
               <Button size="sm" variant="secondary" onClick={() => setEditingName(false)}>Cancel</Button>
             </div>
           ) : (
-            <h3 style={{ cursor: "pointer" }} onClick={() => { setNameValue(workflow.name); setEditingName(true); }}>
-              {workflow.name} <span className="text-muted" style={{ fontSize: "0.5em" }}>click to edit</span>
-            </h3>
+            <div
+              style={{ cursor: "pointer" }}
+              onClick={() => { setNameValue(workflow.name); setEditingName(true); }}
+            >
+              <span className="text-muted small me-2">User Workflow Name:</span>
+              <span style={{ fontSize: "1.1rem", fontWeight: 500 }}>{workflow.name}</span>
+              <span className="text-muted ms-2" style={{ fontSize: "0.8rem" }}>click to edit</span>
+            </div>
           )}
-          <p className="text-muted mb-0">
-            Created {new Date(workflow.created_at).toLocaleDateString()}
-            {workflow.last_run_at && <> &middot; Last run {new Date(workflow.last_run_at).toLocaleString()}</>}
-          </p>
         </div>
         <div className="d-flex gap-2">
           {workflow.type_id === 6 && (
@@ -192,101 +222,98 @@ export default function WorkflowDetail() {
 
       {runMessage && <Alert variant="info" dismissible onClose={() => setRunMessage("")}>{runMessage}</Alert>}
 
-      <Row className="g-4">
-        <Col md={4}>
-          <Card>
-            <Card.Header>Configuration</Card.Header>
-            <Card.Body>
-              <pre className="mb-0" style={{ fontSize: "0.85em", maxHeight: 300, overflow: "auto" }}>
-                {JSON.stringify(workflow.config, null, 2)}
-              </pre>
-            </Card.Body>
-          </Card>
+      <Card>
+        <Card.Header>Configuration</Card.Header>
+        <Card.Body>
+          <pre
+            className="mb-0"
+            style={{ fontSize: "0.85em", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            {JSON.stringify(workflow.config, null, 2)}
+          </pre>
+        </Card.Body>
+      </Card>
 
-          <Card className="mt-3">
-            <Card.Header>Pipeline Steps</Card.Header>
-            <Card.Body className="py-2">
-              {(() => {
-                const stepsByType: Record<number, string[]> = {
-                  1: ["Fetch emails via MCP", "Categorize with AI", "Generate Excel report"],
-                  2: ["Analyze data (profile, filter, chart, quality)"],
-                  3: ["Fetch calendar events via MCP", "Analyze with AI (conflicts, importance)"],
-                  4: ["Execute SQL query", "Analyze results with AI"],
-                };
-                const steps = stepsByType[workflow.type_id] || ["Run workflow"];
-                return (
-                  <ol className="mb-0 ps-3" style={{ fontSize: "0.85em" }}>
-                    {steps.map((s, i) => <li key={i} className="text-muted">{s}</li>)}
-                  </ol>
-                );
-              })()}
-            </Card.Body>
-          </Card>
+      <Card className="mt-3">
+        <Card.Header>Pipeline Steps</Card.Header>
+        <Card.Body className="py-2">
+          {(() => {
+            const stepsByType: Record<number, string[]> = {
+              1: ["Fetch emails via MCP", "Categorize with AI", "Generate Excel report"],
+              2: ["Analyze data (profile, filter, chart, quality)"],
+              3: ["Fetch calendar events via MCP", "Analyze with AI (conflicts, importance)"],
+              4: ["Execute SQL query", "Analyze results with AI"],
+            };
+            const steps = stepsByType[workflow.type_id] || ["Run workflow"];
+            return (
+              <ol className="mb-0 ps-3" style={{ fontSize: "0.85em" }}>
+                {steps.map((s, i) => <li key={i} className="text-muted">{s}</li>)}
+              </ol>
+            );
+          })()}
+        </Card.Body>
+      </Card>
 
-          {workflow.schedule && (
-            <Card className="mt-3">
-              <Card.Header>Schedule</Card.Header>
-              <Card.Body>
-                <pre className="mb-0" style={{ fontSize: "0.85em" }}>
-                  {JSON.stringify(workflow.schedule, null, 2)}
-                </pre>
-              </Card.Body>
-            </Card>
-          )}
-        </Col>
+      {workflow.schedule && (
+        <Card className="mt-3">
+          <Card.Header>Schedule</Card.Header>
+          <Card.Body>
+            <pre className="mb-0" style={{ fontSize: "0.85em", whiteSpace: "pre-wrap" }}>
+              {JSON.stringify(workflow.schedule, null, 2)}
+            </pre>
+          </Card.Body>
+        </Card>
+      )}
 
-        <Col md={8}>
-          <Card>
-            <Card.Header>Run History</Card.Header>
-            <Card.Body className="p-0">
-              {runs.length === 0 ? (
-                <p className="text-muted p-3 mb-0">No runs yet. Click "Run Now" to start.</p>
-              ) : (
-                <Table hover className="mb-0">
-                  <thead>
-                    <tr>
-                      <th>Run</th>
-                      <th>Status</th>
-                      <th>Steps</th>
-                      <th>Trigger</th>
-                      <th>Started</th>
-                      <th>Duration</th>
-                      <th></th>
+      <Card className="mt-3">
+        <Card.Header>Run History</Card.Header>
+        <Card.Body className="p-0">
+          {runs.length === 0 ? (
+            <p className="text-muted p-3 mb-0">No runs yet. Click "Run Now" to start.</p>
+          ) : (
+            <Table hover className="mb-0">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Steps</th>
+                  <th>Trigger</th>
+                  <th>Started</th>
+                  <th>Duration</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => {
+                  const duration = r.completed_at
+                    ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+                    : null;
+                  return (
+                    <tr key={r.run_id}>
+                      <td>#{r.run_id}</td>
+                      <td><StatusBadge status={r.status} /></td>
+                      <td>{r.current_step}/{r.total_steps}</td>
+                      <td><Badge bg="light" text="dark">{r.trigger}</Badge></td>
+                      <td>{new Date(r.started_at).toLocaleString()}</td>
+                      <td>{duration !== null ? `${duration}s` : <Spinner size="sm" animation="border" />}</td>
+                      <td>
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          title={r.artifact_count === 0 ? "Step + status info; no file artifacts produced" : `${r.artifact_count} artifact(s)`}
+                          onClick={() => navigate(`/app/runs/${r.run_id}`)}
+                        >
+                          Details
+                        </Button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {runs.map((r) => {
-                      const duration = r.completed_at
-                        ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
-                        : null;
-                      return (
-                        <tr key={r.run_id}>
-                          <td>#{r.run_id}</td>
-                          <td><StatusBadge status={r.status} /></td>
-                          <td>{r.current_step}/{r.total_steps}</td>
-                          <td><Badge bg="light" text="dark">{r.trigger}</Badge></td>
-                          <td>{new Date(r.started_at).toLocaleString()}</td>
-                          <td>{duration !== null ? `${duration}s` : <Spinner size="sm" animation="border" />}</td>
-                          <td>
-                            <Button
-                              size="sm"
-                              variant="outline-primary"
-                              title={r.artifact_count === 0 ? "Step + status info; no file artifacts produced" : `${r.artifact_count} artifact(s)`}
-                              onClick={() => navigate(`/app/runs/${r.run_id}`)}
-                            >
-                              Details
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Table>
-              )}
-            </Card.Body>
-          </Card>
-        </Col>
-      </Row>
+                  );
+                })}
+              </tbody>
+            </Table>
+          )}
+        </Card.Body>
+      </Card>
 
       <Modal show={showConfig} onHide={() => setShowConfig(false)} size="lg">
         <Modal.Header closeButton>

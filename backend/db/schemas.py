@@ -160,6 +160,7 @@ class UserWorkflowRead(BaseModel):
     enabled: bool
     last_run_at: datetime | None
     created_at: datetime
+    type: WorkflowTypeRead | None = None
 
     class Config:
         from_attributes = True
