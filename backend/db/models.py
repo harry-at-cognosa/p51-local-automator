@@ -120,6 +120,11 @@ class WorkflowTypes(Base):
     long_name: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
     default_config: Mapped[dict] = mapped_column(JSON, nullable=False, server_default=text("'{}'"))
     required_services: Mapped[dict] = mapped_column(JSON, nullable=False, server_default=text("'[]'"))
+    # Optional list of field descriptors that drive the schema-driven config form
+    # for new workflow types. Existing types 1–6 keep their hand-tuned forms;
+    # this is the path forward for new types. See the populating migration for
+    # the schema shape.
+    config_schema: Mapped[list | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
 
     category: Mapped["WorkflowCategories"] = relationship("WorkflowCategories", back_populates="workflow_types")
