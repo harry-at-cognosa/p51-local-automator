@@ -251,6 +251,19 @@ async def _seed_workflow_types(session: AsyncSession, category_ids: dict[str, in
 
 
 async def run_seed():
+    """Populate first-run defaults; no-op once workflow_types is populated.
+
+    Sentinel: a non-empty workflow_types table indicates the platform is past
+    first-run. From that point on, any further changes to seed data go through
+    Alembic migrations, not seed-on-startup. A fresh DB has no workflow_types
+    rows, so the developer-from-scratch path still triggers the full seed.
+    """
+    async with SqlAsyncSession() as session:
+        existing_types = await session.scalar(select(func.count()).select_from(WorkflowTypes))
+        if existing_types and existing_types > 0:
+            print(f"[seed] workflow_types already populated ({existing_types} rows); skipping seed.")
+            return
+
     async with SqlAsyncSession() as session:
         await _seed(session)
     async with SqlAsyncSession() as session:
