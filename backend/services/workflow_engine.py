@@ -9,19 +9,86 @@ Each workflow type defines a list of steps. The engine:
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import WORK_DIR
-from backend.db.models import WorkflowRuns, WorkflowSteps, WorkflowArtifacts, UserWorkflows
+from backend.db.models import (
+    ApiSettings,
+    GroupSettings,
+    UserWorkflows,
+    WorkflowArtifacts,
+    WorkflowRuns,
+    WorkflowSteps,
+)
 from backend.services.logger_service import get_logger
 
 log = get_logger("workflow_engine")
 
 
-def get_run_output_dir(group_id: int, user_id: int, workflow_id: int, run_id: int) -> str:
-    """Return the filesystem path for a run's output files."""
-    path = os.path.join(WORK_DIR, "data", str(group_id), str(user_id), str(workflow_id), str(run_id))
+SETTING_FILE_SYSTEM_ROOT = "file_system_root"
+
+
+async def _resolve_file_system_root(session: AsyncSession, group_id: int) -> str:
+    """Return the file_system_root for a group, falling back to the global default.
+
+    Resolution chain (per Phase 1 plan):
+      1. group_settings row for (group_id, 'file_system_root')
+      2. api_settings row for 'file_system_root'
+      3. RuntimeError — no silent fallback to a hardcoded path.
+    """
+    group_value = await session.scalar(
+        select(GroupSettings.value).where(
+            GroupSettings.group_id == group_id,
+            GroupSettings.name == SETTING_FILE_SYSTEM_ROOT,
+        )
+    )
+    if group_value:
+        return group_value
+
+    global_value = await session.scalar(
+        select(ApiSettings.value).where(ApiSettings.name == SETTING_FILE_SYSTEM_ROOT)
+    )
+    if global_value:
+        return global_value
+
+    raise RuntimeError(
+        f"file_system_root is not configured for group {group_id}; "
+        "set group_settings or api_settings 'file_system_root'"
+    )
+
+
+async def get_run_output_dir(
+    session: AsyncSession,
+    group_id: int,
+    user_id: int,
+    workflow_id: int,
+    run_id: int,
+) -> str:
+    """Return the filesystem path for a run's output files.
+
+    Path layout: <file_system_root>/{group_id}/{user_id}/{workflow_id}/{run_id}/
+    """
+    root = await _resolve_file_system_root(session, group_id)
+    path = os.path.join(root, str(group_id), str(user_id), str(workflow_id), str(run_id))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+async def get_workflow_inputs_dir(
+    session: AsyncSession,
+    group_id: int,
+    user_id: int,
+    workflow_id: int,
+) -> str:
+    """Return the filesystem path for a workflow's user-supplied input files.
+
+    Path layout: <file_system_root>/{group_id}/{user_id}/{workflow_id}/inputs/
+
+    Inputs are colocated under the workflow (not per-run) since users typically
+    reuse the same inputs across runs of the same workflow.
+    """
+    root = await _resolve_file_system_root(session, group_id)
+    path = os.path.join(root, str(group_id), str(user_id), str(workflow_id), "inputs")
     os.makedirs(path, exist_ok=True)
     return path
 

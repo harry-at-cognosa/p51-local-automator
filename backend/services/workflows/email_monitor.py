@@ -86,7 +86,7 @@ async def run_email_monitor(
     scope = config.get("scope", "")
 
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger, config=workflow.config)
-    output_dir = engine.get_run_output_dir(workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
+    output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
     try:
         # ── Step 1: Fetch emails from Apple Mail ──────────────

@@ -99,8 +99,8 @@ async def run_email_auto_reply_draft(
 
         # Step 3: summary artifact (a small text log of what was drafted)
         step_log = await engine.start_step(session, run.run_id, 3, "Write summary log")
-        output_dir = engine.get_run_output_dir(
-            workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id
+        output_dir = await engine.get_run_output_dir(
+            session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id
         )
         import os
         log_path = os.path.join(output_dir, "drafts_saved.txt")

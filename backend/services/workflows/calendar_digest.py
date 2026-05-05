@@ -41,7 +41,7 @@ async def run_calendar_digest(
     days = config.get("days", 7)
 
     run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
-    output_dir = engine.get_run_output_dir(workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
+    output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
     try:
         # ── Step 1: Fetch events ──────────────────────────────
