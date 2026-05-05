@@ -314,7 +314,8 @@ export default function Workflows() {
                 onChange={(e) => setNewName(e.target.value)}
               />
               <Form.Text className="text-muted">
-                Leave blank to use the type name as default.
+                Leave blank to use the type name as default. If you are making more than one,
+                consider adding a configuration-related hint to identify which one this is.
               </Form.Text>
             </Form.Group>
             {selectedTypeId > 0 && (
