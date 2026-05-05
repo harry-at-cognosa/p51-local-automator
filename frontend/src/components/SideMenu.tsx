@@ -42,6 +42,9 @@ export default function SideMenu() {
             <LinkContainer to="/app/admin/groups">
               <Nav.Link>Manage Groups</Nav.Link>
             </LinkContainer>
+            <LinkContainer to="/app/admin/workflow-categories">
+              <Nav.Link>Workflow Categories</Nav.Link>
+            </LinkContainer>
             <LinkContainer to="/app/admin/settings">
               <Nav.Link>Global Settings</Nav.Link>
             </LinkContainer>
