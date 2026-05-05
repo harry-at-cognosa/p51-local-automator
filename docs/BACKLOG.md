@@ -9,9 +9,9 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 
 ## UI / UX
 
-- [Workflow Detail page header](enhancement_workflow_detail_header_260504.md) — show category + type + created on the user_workflow page, demote the user-given name to a labeled smaller field.
-- [Workflow Detail layout](enhancement_workflow_detail_stack_layout_260504.md) — stack Configuration / Pipeline Steps / Run History vertically to avoid horizontal overflow on wide configs (e.g., type 4 SQL).
-- Hint copy on workflow create form: "If you are making more than one, consider adding a configuration-related hint to identify which one this is."
+- ~~[Workflow Detail page header](enhancement_workflow_detail_header_260504.md)~~ — **shipped 2026-05-05** in Phase 2 (commit `phase 2.1`).
+- ~~[Workflow Detail layout](enhancement_workflow_detail_stack_layout_260504.md)~~ — **shipped 2026-05-05** in Phase 2 (commit `phase 2.1`).
+- ~~Hint copy on workflow create form~~ — **shipped 2026-05-05** in Phase 2 (commit `phase 2.2`).
 - File-picker UI for any path-config field, restricted to `<file_system_root>/{group_id}/{user_id}/` (relevant once interactive/batch workflows land).
 
 ## Storage and deployment
@@ -21,7 +21,7 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 
 ## Artifacts
 
-- [Downloaded filename includes run metadata](enhancement_artifact_download_filename_260504.md) — `Content-Disposition` filename should encode timestamp, run_id, workflow_id, category_id, type_id, plus the original filename.
+- ~~[Downloaded filename includes run metadata](enhancement_artifact_download_filename_260504.md)~~ — **shipped 2026-05-05** in Phase 2 (commit `phase 2.3`).
 
 ## Architecture / data model decisions still open
 
