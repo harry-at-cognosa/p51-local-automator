@@ -36,6 +36,12 @@ from backend.db.schemas import (
 )
 from backend.auth.users import current_active_user
 from backend.services import mcp_client
+from backend.services.workflows.calendar_digest import run_calendar_digest
+from backend.services.workflows.data_analyzer import run_data_analyzer
+from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
+from backend.services.workflows.email_auto_reply_draft import run_email_auto_reply_draft
+from backend.services.workflows.email_monitor import run_email_monitor
+from backend.services.workflows.sql_runner import run_sql_runner
 
 router_workflows = APIRouter()
 
@@ -422,13 +428,17 @@ async def list_runs(
 
 # ── Trigger a workflow run ───────────────────────────────────
 
+# Single source of truth for workflow type → runner mapping. Adding a new
+# workflow type means: write the runner module, add an entry here, ship the
+# Alembic data migration that creates the workflow_types row, update the
+# create-form's per-type config UI. No other dispatcher branches to find.
 WORKFLOW_RUNNERS = {
-    1: "email_monitor",
-    2: "data_analyzer",
-    3: "calendar_digest",
-    4: "sql_runner",
-    5: "email_auto_reply_draft",
-    6: "email_auto_reply_approve",
+    1: run_email_monitor,
+    2: run_data_analyzer,
+    3: run_calendar_digest,
+    4: run_sql_runner,
+    5: run_email_auto_reply_draft,
+    6: run_email_auto_reply_approve,
 }
 
 
@@ -439,24 +449,10 @@ async def _run_workflow_background(workflow_id: int):
         if not workflow or workflow.deleted != 0:
             return
 
-        if workflow.type_id == 1:
-            from backend.services.workflows.email_monitor import run_email_monitor
-            await run_email_monitor(session, workflow, trigger="manual")
-        elif workflow.type_id == 2:
-            from backend.services.workflows.data_analyzer import run_data_analyzer
-            await run_data_analyzer(session, workflow, trigger="manual")
-        elif workflow.type_id == 3:
-            from backend.services.workflows.calendar_digest import run_calendar_digest
-            await run_calendar_digest(session, workflow, trigger="manual")
-        elif workflow.type_id == 4:
-            from backend.services.workflows.sql_runner import run_sql_runner
-            await run_sql_runner(session, workflow, trigger="manual")
-        elif workflow.type_id == 5:
-            from backend.services.workflows.email_auto_reply_draft import run_email_auto_reply_draft
-            await run_email_auto_reply_draft(session, workflow, trigger="manual")
-        elif workflow.type_id == 6:
-            from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
-            await run_email_auto_reply_approve(session, workflow, trigger="manual")
+        runner = WORKFLOW_RUNNERS.get(workflow.type_id)
+        if not runner:
+            return
+        await runner(session, workflow, trigger="manual")
 
 
 @router_workflows.post("/workflows/{workflow_id}/run", response_model=dict)
