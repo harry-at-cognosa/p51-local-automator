@@ -176,6 +176,9 @@ class WorkflowRuns(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Captured at run start from user_workflows.config. NULL for runs created
+    # before the column existed (no authoritative source to backfill).
+    config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     workflow: Mapped["UserWorkflows"] = relationship("UserWorkflows", back_populates="runs")
     steps: Mapped[list["WorkflowSteps"]] = relationship("WorkflowSteps", back_populates="run")
