@@ -135,6 +135,7 @@ class WorkflowTypeRead(BaseModel):
     category: WorkflowCategoryRead
     default_config: dict
     required_services: list | dict
+    config_schema: list | None = None
     enabled: bool
 
     class Config:
