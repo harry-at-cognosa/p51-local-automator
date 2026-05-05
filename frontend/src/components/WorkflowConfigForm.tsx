@@ -1,9 +1,16 @@
 import { Form, Row, Col, Badge } from "react-bootstrap";
+import SchemaConfigForm, { type FieldDescriptor } from "./SchemaConfigForm";
 
 interface Props {
   typeId: number;
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  /**
+   * Optional config_schema from the workflow type. If supplied AND no typeId
+   * branch handles this typeId, the generic SchemaConfigForm renders the form.
+   * Types 1–6 keep their hand-tuned UX even when a schema is also present.
+   */
+  configSchema?: FieldDescriptor[] | null;
 }
 
 const PERIOD_OPTIONS = [
@@ -24,7 +31,7 @@ const CALENDAR_OPTIONS = [
   "Work", "Family", "Home", "Calendar",
 ];
 
-export default function WorkflowConfigForm({ typeId, config, onChange }: Props) {
+export default function WorkflowConfigForm({ typeId, config, onChange, configSchema }: Props) {
   const set = (key: string, value: unknown) => {
     onChange({ ...config, [key]: value });
   };
@@ -365,7 +372,14 @@ export default function WorkflowConfigForm({ typeId, config, onChange }: Props) 
     );
   }
 
-  // Fallback: raw JSON
+  // Schema-driven path for new workflow types whose typeId has no
+  // hand-tuned branch above. The backend's config_schema describes the
+  // fields and the generic renderer handles them.
+  if (configSchema && configSchema.length > 0) {
+    return <SchemaConfigForm schema={configSchema} config={config} onChange={onChange} />;
+  }
+
+  // Final fallback: raw JSON when no schema is available either.
   return (
     <Form.Group>
       <Form.Label>Configuration (JSON)</Form.Label>

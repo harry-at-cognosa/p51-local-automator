@@ -19,6 +19,7 @@ interface WorkflowTypeNested {
   short_name: string;
   long_name: string;
   category: WorkflowCategoryNested;
+  config_schema?: unknown[] | null;
 }
 
 interface UserWorkflow {
@@ -335,7 +336,16 @@ export default function WorkflowDetail() {
           </Form.Group>
           <hr />
           <h6 className="mb-3">Configuration</h6>
-          <WorkflowConfigForm typeId={workflow.type_id} config={editConfig} onChange={setEditConfig} />
+          <WorkflowConfigForm
+            typeId={workflow.type_id}
+            config={editConfig}
+            onChange={setEditConfig}
+            configSchema={
+              (workflow.type?.config_schema as
+                | import("../components/SchemaConfigForm").FieldDescriptor[]
+                | undefined) ?? null
+            }
+          />
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowConfig(false)}>Cancel</Button>

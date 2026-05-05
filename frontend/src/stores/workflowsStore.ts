@@ -19,6 +19,7 @@ export interface WorkflowType {
   long_name: string;
   category: WorkflowCategory;
   default_config: Record<string, unknown>;
+  config_schema?: unknown[] | null;
   enabled: boolean;
 }
 

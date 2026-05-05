@@ -322,7 +322,16 @@ export default function Workflows() {
               <>
                 <hr />
                 <h6 className="mb-3">Configuration</h6>
-                <WorkflowConfigForm typeId={selectedTypeId} config={newConfig} onChange={setNewConfig} />
+                <WorkflowConfigForm
+                  typeId={selectedTypeId}
+                  config={newConfig}
+                  onChange={setNewConfig}
+                  configSchema={
+                    (types.find((t) => t.type_id === selectedTypeId)?.config_schema as
+                      | import("../components/SchemaConfigForm").FieldDescriptor[]
+                      | undefined) ?? null
+                  }
+                />
               </>
             )}
           </Modal.Body>
