@@ -1,13 +1,40 @@
 """Artifact download API — serve generated files to authenticated users."""
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.session import async_get_session
-from backend.db.models import User, UserWorkflows, WorkflowArtifacts, WorkflowRuns
+from backend.db.models import User, UserWorkflows, WorkflowArtifacts, WorkflowRuns, WorkflowTypes
 from backend.auth.users import current_active_user, fastapi_users, auth_backend
+
+
+_FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_filename_segment(name: str) -> str:
+    """Replace runs of non-safe chars with a single underscore, trim edges."""
+    return _FILENAME_UNSAFE.sub("_", name).strip("_") or "artifact"
+
+
+def _build_download_filename(
+    started_at,
+    run_id: int,
+    workflow_id: int,
+    category_id: int,
+    type_id: int,
+    original_filename: str,
+) -> str:
+    """Construct YYMMDD_HHMMSS_run_N_uwf_N_cat_N_type_N_<original>.
+
+    Timestamp comes from the run's started_at (local time).
+    The original filename is sanitized to keep the prefix readable.
+    """
+    ts = started_at.strftime("%y%m%d_%H%M%S")
+    safe = _sanitize_filename_segment(original_filename)
+    return f"{ts}_run_{run_id}_uwf_{workflow_id}_cat_{category_id}_type_{type_id}_{safe}"
 
 router_artifacts = APIRouter()
 
@@ -63,11 +90,21 @@ async def download_artifact(
     workflow = await session.get(UserWorkflows, run.workflow_id)
     if not workflow or workflow.group_id != user.group_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    workflow_type = await session.get(WorkflowTypes, workflow.type_id)
 
     if not os.path.isfile(artifact.file_path):
         raise HTTPException(status_code=404, detail="File not found on server")
 
-    filename = os.path.basename(artifact.file_path)
+    original_filename = os.path.basename(artifact.file_path)
+    download_filename = _build_download_filename(
+        started_at=run.started_at,
+        run_id=run.run_id,
+        workflow_id=workflow.workflow_id,
+        category_id=workflow_type.category_id if workflow_type else 0,
+        type_id=workflow.type_id,
+        original_filename=original_filename,
+    )
+
     media_types = {
         "json": "application/json",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -80,5 +117,5 @@ async def download_artifact(
     return FileResponse(
         artifact.file_path,
         media_type=media_type,
-        filename=filename,
+        filename=download_filename,
     )
