@@ -46,11 +46,15 @@ export interface Filters {
   status: string;   // "completed" | "running" | "failed" | "pending" | ""
 }
 
+// All sort options are descending (newest first).
+export type SortBy = "workflow_id" | "last_run_at" | "created_at";
+
 interface WorkflowsState {
   items: UserWorkflowListRow[];
   categories: WorkflowCategory[];
   types: WorkflowType[];
   filters: Filters;
+  sortBy: SortBy;
   page: number;
   pageSize: number;
   selectedIds: Set<number>;
@@ -60,6 +64,7 @@ interface WorkflowsState {
   fetchAll: () => Promise<void>;
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
   resetFilters: () => void;
+  setSortBy: (s: SortBy) => void;
   setPage: (n: number) => void;
   setPageSize: (n: number) => void;
   toggleSelected: (id: number) => void;
@@ -70,6 +75,7 @@ interface WorkflowsState {
 
 interface Persisted {
   pageSize: number;
+  sortBy: SortBy;
 }
 
 const DEFAULT_FILTERS: Filters = { category: "", type: "", name: "", status: "" };
@@ -81,6 +87,7 @@ export const useWorkflowsStore = create<WorkflowsState>()(
       categories: [],
       types: [],
       filters: { ...DEFAULT_FILTERS },
+      sortBy: "workflow_id",
       page: 1,
       pageSize: 25,
       selectedIds: new Set<number>(),
@@ -111,6 +118,8 @@ export const useWorkflowsStore = create<WorkflowsState>()(
         set((s) => ({ filters: { ...s.filters, [key]: value }, page: 1 })),
 
       resetFilters: () => set({ filters: { ...DEFAULT_FILTERS }, page: 1 }),
+
+      setSortBy: (s) => set({ sortBy: s, page: 1 }),
 
       setPage: (n) => set({ page: Math.max(1, n) }),
 
@@ -143,7 +152,10 @@ export const useWorkflowsStore = create<WorkflowsState>()(
     }),
     {
       name: "wf-list-page-size",
-      partialize: (state): Persisted => ({ pageSize: state.pageSize }),
+      partialize: (state): Persisted => ({
+        pageSize: state.pageSize,
+        sortBy: state.sortBy,
+      }),
     }
   )
 );

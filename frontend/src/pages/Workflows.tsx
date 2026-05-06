@@ -17,6 +17,7 @@ export default function Workflows() {
     categories,
     types,
     filters,
+    sortBy,
     page,
     pageSize,
     selectedIds,
@@ -24,6 +25,7 @@ export default function Workflows() {
     error,
     fetchAll,
     setFilter,
+    setSortBy,
     setPage,
     setPageSize,
     toggleSelected,
@@ -39,7 +41,7 @@ export default function Workflows() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Filtered, sorted dataset (client-side)
+  // Filtered dataset (client-side)
   const filtered = useMemo(() => {
     const nameQ = filters.name.trim().toLowerCase();
     return items.filter((w) => {
@@ -57,11 +59,29 @@ export default function Workflows() {
     });
   }, [items, filters]);
 
-  const totalRows = filtered.length;
+  // Sorted (after filter, before pagination). All sorts are descending.
+  // last_run_at puts NULL (never run) rows at the bottom.
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      if (sortBy === "workflow_id") return b.workflow_id - a.workflow_id;
+      if (sortBy === "created_at") return b.created_at.localeCompare(a.created_at);
+      if (sortBy === "last_run_at") {
+        if (!a.last_run_at && !b.last_run_at) return 0;
+        if (!a.last_run_at) return 1;
+        if (!b.last_run_at) return -1;
+        return b.last_run_at.localeCompare(a.last_run_at);
+      }
+      return 0;
+    });
+    return arr;
+  }, [filtered, sortBy]);
+
+  const totalRows = sorted.length;
   const pageStart = (page - 1) * pageSize;
   const pageItems = useMemo(
-    () => filtered.slice(pageStart, pageStart + pageSize),
-    [filtered, pageStart, pageSize]
+    () => sorted.slice(pageStart, pageStart + pageSize),
+    [sorted, pageStart, pageSize]
   );
 
   // Clamp page if filter reduced it below current
@@ -123,6 +143,21 @@ export default function Workflows() {
         <p className="text-muted">No workflows configured yet. Click "+ New Workflow" to get started.</p>
       ) : (
         <>
+          <div className="d-flex align-items-center gap-2 py-2">
+            <span className="text-muted small">Sort by:</span>
+            <Form.Select
+              size="sm"
+              style={{ width: "auto" }}
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "workflow_id" | "last_run_at" | "created_at")}
+              aria-label="Sort workflows"
+            >
+              <option value="workflow_id">ID (newest first)</option>
+              <option value="last_run_at">Last run (newest first)</option>
+              <option value="created_at">Created (newest first)</option>
+            </Form.Select>
+          </div>
+
           <TableVCRPager
             page={page}
             totalRows={totalRows}
