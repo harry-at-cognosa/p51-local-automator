@@ -93,6 +93,25 @@ async def get_workflow_inputs_dir(
     return path
 
 
+async def get_user_inputs_dir(
+    session: AsyncSession,
+    group_id: int,
+    user_id: int,
+) -> str:
+    """Return the per-user filesystem root for input files reusable across workflows.
+
+    Path layout: <file_system_root>/{group_id}/{user_id}/inputs/
+
+    Files placed here are visible to every workflow owned by this user. Use this
+    for input pickers; use get_workflow_inputs_dir() when a workflow needs its
+    own private inputs space (e.g., per-workflow processed-files ledgers).
+    """
+    root = await _resolve_file_system_root(session, group_id)
+    path = os.path.join(root, str(group_id), str(user_id), "inputs")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 async def create_run(
     session: AsyncSession,
     workflow_id: int,
