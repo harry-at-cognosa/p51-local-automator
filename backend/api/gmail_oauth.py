@@ -185,17 +185,20 @@ async def oauth_callback(
             detail="Google did not return a refresh token. Try disconnecting any prior consent at https://myaccount.google.com/permissions and retry.",
         )
 
-    # Look up the connected email via Google's userinfo endpoint.
+    # Look up the connected email via the Gmail API itself. users.getProfile
+    # returns emailAddress and is permitted by the gmail.readonly scope we
+    # already requested — avoids needing to also ask for openid/email/profile
+    # scopes (which the deprecated /oauth2/v2/userinfo endpoint requires).
     from googleapiclient.discovery import build
     try:
-        service = build("oauth2", "v2", credentials=creds, cache_discovery=False)
-        userinfo = service.userinfo().get().execute()
-        email = userinfo.get("email")
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        profile = service.users().getProfile(userId="me").execute()
+        email = profile.get("emailAddress")
     except Exception as e:
         log.warning("oauth_callback_userinfo_failed", error=str(e)[:200])
         raise HTTPException(status_code=502, detail=f"Failed to fetch userinfo from Google: {e}")
     if not email:
-        raise HTTPException(status_code=502, detail="Google userinfo did not include an email.")
+        raise HTTPException(status_code=502, detail="Gmail users.getProfile did not include an email.")
 
     # Resolve the user's group_id via the api_users row.
     user_row = await session.scalar(select(User).where(User.user_id == user_id))
