@@ -47,6 +47,14 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - Soft-deleted groups still own files under their `data/` subtree — decide whether to archive or delete.
 - ~~**Per-workflow run lock**~~ — **shipped 2026-05-06** in Phase F5 (commits `phase F5.1` through `phase F5.5`). Postgres partial unique index on `workflow_runs(workflow_id) WHERE status IN ('pending','running')` enforces "one active run per workflow" at the DB. `trigger_run` and `_run_workflow_background` both pre-check and return 409 / log structured skip. Startup watchdog flips abandoned ('running' for >24h) rows to 'failed'. Frontend Run Now button surfaces the 409 message inline. Closes the auto-reply double-process race for types 5/6 as a side effect; mandatory for AWF-1 given run cost/duration.
 
+## Track B (Gmail / Workspace)
+
+- ~~**B1 — Read-only Gmail for Type 1**~~ — **shipped 2026-05-06** in commits `phase B1.1` through `phase B1.10`. Per-customer GCP project model. New tables `gmail_accounts` + `gmail_token_usage`; AES-GCM encryption helper at `backend/services/secrets.py` (TOKEN_ENCRYPTION_KEY env var). OAuth flow at `/api/v1/gmail/oauth/{start,callback}` with state JWT signed by SECRET. Read-only `gmail_client.py` mirrors mcp_client.mail_* shape. `email_monitor.py` branches on `config.service`: apple_mail (existing) or gmail (new account_id-driven). Frontend Connections page + side menu link. Type 1 form gains service+gmail-account picker. Backend boots clean without `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` set; OAuth start returns 503 until configured.
+- **B2 — Gmail send/draft for types 5 & 6** — depends on B1 + type 4 secrets reuse. Adds `gmail.send` and `gmail.compose` scopes; existing OAuth flow upgrades scope on re-consent. Send/save-draft logic in `email_auto_reply_*.py` branches on `service`. Pending-reply approval queue dispatch becomes service-aware.
+- **B3 — Domain-wide delegation** (deferred). Per Track B scoping doc; revisit when a Workspace customer asks.
+- **B4 — Consumer @gmail.com support** (deferred indefinitely).
+- **Type 4 connection_string encryption** — small follow-on phase. Reuse `backend/services/secrets.py` to wrap the plaintext `connection_string` in user_workflows.config for type 4 (SQL Query Runner). Migrate existing rows opportunistically on next workflow edit.
+
 ## Notes
 
 - [User story for workflow categories, types, and user workflows](user_story_workflow_categories_types_and_user_workflows.md) — captures the user-facing model: catalog is fixed, users clone-and-name, multiple instances per type, tune in place, retire by disable.
