@@ -35,7 +35,8 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 - Multi-tenant: all queries filter by `group_id`
 - Soft deletes: `deleted` column (0=active, 1=deleted)
 - Roles: superuser > groupadmin > manager > employee
-- Output files: `data/{group_id}/{user_id}/{workflow_id}/{run_id}/`
+- Output files: `<file_system_root>/{group_id}/{user_id}/{workflow_id}/{run_id}/` (resolved per Phase 1.4 chain: group_settings → api_settings → error)
+- User input files: `<file_system_root>/{group_id}/{user_id}/inputs/` — per-user sandbox surfaced to the workflow config UI by the `GET /api/v1/files/list` endpoint and the `<FilePicker>` component. Reusable across all workflows owned by that user.
 
 ## Database
 
