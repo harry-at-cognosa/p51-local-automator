@@ -45,6 +45,11 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - `SECRET=change-me-in-production` and `DEFAULT_ADMIN_PASSWORD=admin` defaults need a deployment-readiness check.
 - `mcp/` directory is empty despite CLAUDE.md saying start scripts live there.
 - Soft-deleted groups still own files under their `data/` subtree — decide whether to archive or delete.
+- **Expose hard limits as config fields** — several runners have hardcoded fetch caps that should be per-workflow config with sensible defaults. Captured 2026-05-06.
+  - `email_monitor.py:141,145` — `limit=100` for both apple_mail and gmail paths. Add `config.max_emails` (default 100, max maybe 500).
+  - `calendar_digest.py` — `config.days` already exposed (default 7), but no per-event cap. Probably fine for v1; revisit if a long horizon explodes the LLM context.
+  - `email_auto_reply_engine.py:339` — `fetch_limit` is already exposed in types 5/6 config (default 50). Harmonize naming with the new email_monitor field once added.
+  - Frontend: surface the new fields in the typeId branches of `WorkflowConfigForm.tsx` and in the type 1 / type 3 `config_schema` migrations.
 - ~~**Per-workflow run lock**~~ — **shipped 2026-05-06** in Phase F5 (commits `phase F5.1` through `phase F5.5`). Postgres partial unique index on `workflow_runs(workflow_id) WHERE status IN ('pending','running')` enforces "one active run per workflow" at the DB. `trigger_run` and `_run_workflow_background` both pre-check and return 409 / log structured skip. Startup watchdog flips abandoned ('running' for >24h) rows to 'failed'. Frontend Run Now button surfaces the 409 message inline. Closes the auto-reply double-process race for types 5/6 as a side effect; mandatory for AWF-1 given run cost/duration.
 
 ## Track B (Gmail / Workspace)
