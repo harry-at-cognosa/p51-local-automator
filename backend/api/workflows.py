@@ -421,6 +421,7 @@ async def list_runs(
                 completed_at=run.completed_at,
                 error_detail=run.error_detail,
                 artifact_count=int(count or 0),
+                config_snapshot=run.config_snapshot,
             )
         )
     return rows
@@ -493,6 +494,8 @@ async def get_run(
         select(func.count(WorkflowArtifacts.artifact_id)).where(WorkflowArtifacts.run_id == run_id)
     )
 
+    workflow_type = await session.get(WorkflowTypes, workflow.type_id)
+
     return WorkflowRunRead(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
@@ -505,6 +508,9 @@ async def get_run(
         completed_at=run.completed_at,
         error_detail=run.error_detail,
         artifact_count=int(artifact_count or 0),
+        config_snapshot=run.config_snapshot,
+        type_id=workflow.type_id,
+        config_schema=workflow_type.config_schema if workflow_type else None,
     )
 
 
