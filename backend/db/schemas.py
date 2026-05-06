@@ -248,6 +248,9 @@ class WorkflowStepRead(BaseModel):
     artifacts: dict | None
     llm_tokens_used: int
     error_detail: str | None
+    # Agentic-engine annotations; NULL for steps from types 1–6.
+    stage: str | None = None
+    kind: str | None = None
 
     class Config:
         from_attributes = True

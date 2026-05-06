@@ -209,6 +209,11 @@ class WorkflowSteps(Base):
     artifacts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     llm_tokens_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Agentic-engine annotations. NULL for steps from types 1–6.
+    # stage ∈ {ingest, profile, analyze, synthesize, audit, scribe}
+    # kind  ∈ {skill_call, llm_turn, stage_marker}
+    stage: Mapped[str | None] = mapped_column(VARCHAR, nullable=True)
+    kind: Mapped[str | None] = mapped_column(VARCHAR, nullable=True)
 
     run: Mapped["WorkflowRuns"] = relationship("WorkflowRuns", back_populates="steps")
 
