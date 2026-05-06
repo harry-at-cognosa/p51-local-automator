@@ -13,6 +13,7 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - ~~[Workflow Detail layout](enhancement_workflow_detail_stack_layout_260504.md)~~ — **shipped 2026-05-05** in Phase 2 (commit `phase 2.1`).
 - ~~Hint copy on workflow create form~~ — **shipped 2026-05-05** in Phase 2 (commit `phase 2.2`).
 - ~~File-picker UI for any path-config field, restricted to `<file_system_root>/{group_id}/{user_id}/inputs/`~~ — **shipped 2026-05-06** in Phase F1 (commits `phase F1.1` through `phase F1.6`). New `file_picker` and `repeating_rows` field types in `SchemaConfigForm`, plus `<FilePicker>` modal and `GET /api/v1/files/list` endpoint. AWF-1 will consume both via its config_schema in A1.
+- **Workflow list sort options** — the workflows page currently sorts by `workflow_id` descending (newest created first). Add a sort-by selector with three options: `workflow_id` (current default), `last_run_at`, `created_at` — all newest-first. Useful once a user has many workflows and wants to find the recently-active ones quickly. Captured 2026-05-06; pairs naturally with the email-workflow polish queue that's adding filters and the VCR pager to the same page.
 
 ## Storage and deployment
 
