@@ -19,3 +19,11 @@ CORS_ORIGINS = [s.strip() for s in os.getenv("CORS_ORIGINS", "").split(",") if s
 SCHEDULER_CHECK_INTERVAL_SECONDS = int(os.getenv("SCHEDULER_CHECK_INTERVAL_SECONDS", "60"))
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Track B Phase B1 — Gmail OAuth integration. Empty defaults mean the
+# Gmail integration is not configured on this server; OAuth endpoints
+# return 503 until all three are set. Each customer registers their own
+# GCP project per docs/track_b_gmail_workspace_scoping_260426.md.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")

@@ -25,6 +25,10 @@ anthropic>=0.40.0
 # MCP client
 mcp>=1.0.0
 
+# Google Workspace / Gmail (Track B Phase B1)
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.130.0
+
 # Scheduling
 apscheduler>=3.10.0,<4
 
