@@ -1,5 +1,6 @@
 fastapi>=0.115.0
 fastapi-users[sqlalchemy]>=14.0.0
+cryptography>=42.0.0  # explicit pin for backend/services/secrets.py (also a transitive dep of fastapi-users)
 uvicorn[standard]>=0.30.0
 sqlalchemy>=2.0.30
 alembic>=1.13.0
