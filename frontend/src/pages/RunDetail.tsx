@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Container, Card, Badge, Table, Button, Spinner, Alert } from "react-bootstrap";
 import StatusBadge from "../components/StatusBadge";
+import ConfigSnapshotPanel from "../components/ConfigSnapshotPanel";
+import type { FieldDescriptor } from "../components/SchemaConfigForm";
 import axiosClient from "../api/axiosClient";
 
 interface WorkflowRun {
@@ -15,6 +17,9 @@ interface WorkflowRun {
   started_at: string;
   completed_at: string | null;
   error_detail: string | null;
+  config_snapshot: Record<string, unknown> | null;
+  type_id: number | null;
+  config_schema: FieldDescriptor[] | null;
 }
 
 interface WorkflowStep {
@@ -116,6 +121,8 @@ export default function RunDetail() {
       {run.error_detail && (
         <Alert variant="danger">{run.error_detail}</Alert>
       )}
+
+      <ConfigSnapshotPanel snapshot={run.config_snapshot} schema={run.config_schema} />
 
       <Card className="mb-4">
         <Card.Header>Steps ({run.current_step}/{run.total_steps})</Card.Header>
