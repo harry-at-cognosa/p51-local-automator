@@ -45,6 +45,7 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - `SECRET=change-me-in-production` and `DEFAULT_ADMIN_PASSWORD=admin` defaults need a deployment-readiness check.
 - `mcp/` directory is empty despite CLAUDE.md saying start scripts live there.
 - Soft-deleted groups still own files under their `data/` subtree — decide whether to archive or delete.
+- ~~**Per-workflow run lock**~~ — **shipped 2026-05-06** in Phase F5 (commits `phase F5.1` through `phase F5.5`). Postgres partial unique index on `workflow_runs(workflow_id) WHERE status IN ('pending','running')` enforces "one active run per workflow" at the DB. `trigger_run` and `_run_workflow_background` both pre-check and return 409 / log structured skip. Startup watchdog flips abandoned ('running' for >24h) rows to 'failed'. Frontend Run Now button surfaces the 409 message inline. Closes the auto-reply double-process race for types 5/6 as a side effect; mandatory for AWF-1 given run cost/duration.
 
 ## Notes
 
