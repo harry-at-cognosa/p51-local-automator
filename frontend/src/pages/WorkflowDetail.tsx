@@ -100,8 +100,16 @@ export default function WorkflowDetail() {
           axiosClient.get(`/workflows/${id}`).then((res) => setWorkflow(res.data));
         }
       }, 3000);
-    } catch {
-      setRunMessage("Failed to trigger run");
+    } catch (err: unknown) {
+      // F5: a 409 means another active run already exists for this
+      // workflow_id. Surface the backend's detail message verbatim — it
+      // includes the existing run_id so the user can navigate to it.
+      const e = err as { response?: { status?: number; data?: { detail?: string } } };
+      if (e.response?.status === 409 && e.response.data?.detail) {
+        setRunMessage(e.response.data.detail);
+      } else {
+        setRunMessage("Failed to trigger run");
+      }
       setRunning(false);
     }
   };
