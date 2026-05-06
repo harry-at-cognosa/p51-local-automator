@@ -6,10 +6,10 @@
  * 1–6 keep their hand-tuned forms in WorkflowConfigForm.tsx for now.
  *
  * Field types supported: string, multiline, number, date, string_list,
- * select, checkbox_list, file_picker.
+ * select, checkbox_list, file_picker, repeating_rows.
  */
 import { useState } from "react";
-import { Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
+import { Form, Row, Col, Badge, Button, InputGroup, Card } from "react-bootstrap";
 import FilePicker, { type FilePickerSelection } from "./FilePicker";
 
 export interface FieldOption {
@@ -29,7 +29,8 @@ export interface FieldDescriptor {
     | "string_list"
     | "select"
     | "checkbox_list"
-    | "file_picker";
+    | "file_picker"
+    | "repeating_rows";
   default?: unknown;
   placeholder?: string;
   help?: string;
@@ -42,6 +43,10 @@ export interface FieldDescriptor {
   mono?: boolean;
   show_badges?: boolean;
   filter_extensions?: string[];   // file_picker only
+  row_schema?: FieldDescriptor[]; // repeating_rows only
+  min_rows?: number;              // repeating_rows only
+  max_rows?: number;              // repeating_rows only
+  add_label?: string;             // repeating_rows only — defaults to "Add row"
 }
 
 interface Props {
@@ -54,14 +59,11 @@ const widthToCol = (w?: string) =>
   w === "full" ? 12 : w === "third" ? 4 : 6;
 
 export default function SchemaConfigForm({ schema, config, onChange }: Props) {
-  const set = (key: string, value: unknown) => {
-    onChange({ ...config, [key]: value });
-  };
-
   return (
     <Row className="g-3">
       {schema.map((f) => {
         const current = config[f.name] ?? f.default ?? "";
+        const setValue = (v: unknown) => onChange({ ...config, [f.name]: v });
         return (
           <Col key={f.name} md={widthToCol(f.width)}>
             <Form.Group>
@@ -71,7 +73,7 @@ export default function SchemaConfigForm({ schema, config, onChange }: Props) {
                   <span className="text-muted fw-normal"> {f.label_suffix}</span>
                 )}
               </Form.Label>
-              {renderInput(f, current, set)}
+              {renderInput(f, current, setValue)}
               {f.help && <Form.Text className="text-muted">{f.help}</Form.Text>}
               {f.type === "string_list" && f.show_badges && renderBadges(current)}
             </Form.Group>
@@ -85,7 +87,7 @@ export default function SchemaConfigForm({ schema, config, onChange }: Props) {
 function renderInput(
   f: FieldDescriptor,
   current: unknown,
-  set: (k: string, v: unknown) => void,
+  setValue: (v: unknown) => void,
 ) {
   const monoStyle = f.mono ? { fontFamily: "monospace", fontSize: "0.9em" } : undefined;
 
@@ -96,7 +98,7 @@ function renderInput(
           type="text"
           placeholder={f.placeholder}
           value={(current as string) || ""}
-          onChange={(e) => set(f.name, e.target.value)}
+          onChange={(e) => setValue(e.target.value)}
         />
       );
 
@@ -107,7 +109,7 @@ function renderInput(
           rows={f.rows ?? 4}
           placeholder={f.placeholder}
           value={(current as string) || ""}
-          onChange={(e) => set(f.name, e.target.value)}
+          onChange={(e) => setValue(e.target.value)}
           style={monoStyle}
         />
       );
@@ -123,7 +125,7 @@ function renderInput(
               ? (current as number | string)
               : (f.default as number) ?? 0
           }
-          onChange={(e) => set(f.name, Number(e.target.value))}
+          onChange={(e) => setValue(Number(e.target.value))}
         />
       );
 
@@ -132,7 +134,7 @@ function renderInput(
         <Form.Control
           type="date"
           value={(current as string) || ""}
-          onChange={(e) => set(f.name, e.target.value)}
+          onChange={(e) => setValue(e.target.value)}
         />
       );
 
@@ -145,10 +147,7 @@ function renderInput(
           value={list.join(", ")}
           onChange={(e) => {
             const v = e.target.value;
-            set(
-              f.name,
-              v ? v.split(",").map((t) => t.trim()).filter(Boolean) : [],
-            );
+            setValue(v ? v.split(",").map((t) => t.trim()).filter(Boolean) : []);
           }}
         />
       );
@@ -158,7 +157,7 @@ function renderInput(
       return (
         <Form.Select
           value={(current as string) || ""}
-          onChange={(e) => set(f.name, e.target.value)}
+          onChange={(e) => setValue(e.target.value)}
         >
           {(f.options ?? []).map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -180,9 +179,9 @@ function renderInput(
               checked={selected.includes(opt)}
               onChange={(e) => {
                 if (e.target.checked) {
-                  set(f.name, [...selected, opt]);
+                  setValue([...selected, opt]);
                 } else {
-                  set(f.name, selected.filter((x) => x !== opt));
+                  setValue(selected.filter((x) => x !== opt));
                 }
               }}
             />
@@ -192,14 +191,17 @@ function renderInput(
     }
 
     case "file_picker":
-      return <FilePickerInput field={f} value={current} onChange={(v) => set(f.name, v)} />;
+      return <FilePickerInput field={f} value={current} onChange={setValue} />;
+
+    case "repeating_rows":
+      return <RepeatingRows field={f} value={current} onChange={setValue} />;
 
     default:
       return (
         <Form.Control
           type="text"
           value={String(current ?? "")}
-          onChange={(e) => set(f.name, e.target.value)}
+          onChange={(e) => setValue(e.target.value)}
         />
       );
   }
@@ -241,6 +243,108 @@ function FilePickerInput({
         onCancel={() => setShow(false)}
       />
     </>
+  );
+}
+
+type RowDict = Record<string, unknown>;
+
+function RepeatingRows({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldDescriptor;
+  value: unknown;
+  onChange: (v: RowDict[]) => void;
+}) {
+  const rowSchema = field.row_schema ?? [];
+  const minRows = field.min_rows ?? 0;
+  const maxRows = field.max_rows ?? Infinity;
+
+  const rows: RowDict[] = Array.isArray(value)
+    ? (value as RowDict[])
+    : Array.from({ length: Math.max(minRows, 0) }, () => ({}));
+
+  const updateRow = (idx: number, key: string, v: unknown) => {
+    const next = rows.map((r, i) => (i === idx ? { ...r, [key]: v } : r));
+    onChange(next);
+  };
+
+  const addRow = () => {
+    if (rows.length >= maxRows) return;
+    onChange([...rows, {}]);
+  };
+
+  const deleteRow = (idx: number) => {
+    if (rows.length <= minRows) return;
+    onChange(rows.filter((_, i) => i !== idx));
+  };
+
+  const canAdd = rows.length < maxRows;
+  const canDelete = rows.length > minRows;
+
+  return (
+    <div>
+      {rows.length === 0 && (
+        <div className="text-muted small mb-2">No rows yet — use the button below to add one.</div>
+      )}
+      {rows.map((row, idx) => (
+        <Card key={idx} className="mb-2">
+          <Card.Body className="py-2">
+            <Row className="g-2 align-items-end">
+              {rowSchema.map((sub) => {
+                const subCurrent = row[sub.name] ?? sub.default ?? "";
+                const subSet = (v: unknown) => updateRow(idx, sub.name, v);
+                return (
+                  <Col key={sub.name} md={widthToCol(sub.width)}>
+                    <Form.Group>
+                      <Form.Label className="small mb-1">
+                        {sub.label}
+                        {sub.label_suffix && (
+                          <span className="text-muted fw-normal"> {sub.label_suffix}</span>
+                        )}
+                      </Form.Label>
+                      {renderInput(sub, subCurrent, subSet)}
+                      {sub.help && (
+                        <Form.Text className="text-muted small">{sub.help}</Form.Text>
+                      )}
+                    </Form.Group>
+                  </Col>
+                );
+              })}
+              <Col xs="auto">
+                <Button
+                  size="sm"
+                  variant="outline-danger"
+                  onClick={() => deleteRow(idx)}
+                  disabled={!canDelete}
+                  title={canDelete ? "Remove this row" : `At least ${minRows} required`}
+                >
+                  Remove
+                </Button>
+              </Col>
+            </Row>
+          </Card.Body>
+        </Card>
+      ))}
+      <div className="d-flex gap-2">
+        <Button
+          size="sm"
+          variant="outline-primary"
+          onClick={addRow}
+          disabled={!canAdd}
+          title={canAdd ? "" : `Maximum ${maxRows} rows`}
+        >
+          + {field.add_label ?? "Add row"}
+        </Button>
+        {rows.length > 0 && (
+          <span className="text-muted small align-self-center">
+            {rows.length} {rows.length === 1 ? "row" : "rows"}
+            {Number.isFinite(maxRows) ? ` (max ${maxRows})` : ""}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
