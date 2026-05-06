@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Form, Row, Col, Badge } from "react-bootstrap";
 import SchemaConfigForm, { type FieldDescriptor } from "./SchemaConfigForm";
+import axiosClient from "../api/axiosClient";
 
 interface Props {
   typeId: number;
@@ -36,87 +38,10 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
     onChange({ ...config, [key]: value });
   };
 
-  // Email Topic Monitor
+  // Email Topic Monitor — extracted to its own component so the
+  // service-switch + gmail-accounts fetch can use hooks.
   if (typeId === 1) {
-    const topics = (config.topics as string[]) || [];
-    return (
-      <>
-        <Row className="g-3">
-          <Col md={6}>
-            <Form.Group>
-              <Form.Label>Mail Account</Form.Label>
-              <Form.Select
-                value={(config.account as string) || "iCloud"}
-                onChange={(e) => set("account", e.target.value)}
-              >
-                {MAIL_ACCOUNTS.map((a) => (
-                  <option key={a.value} value={a.value}>{a.label}</option>
-                ))}
-              </Form.Select>
-            </Form.Group>
-          </Col>
-          <Col md={6}>
-            <Form.Group>
-              <Form.Label>Mailbox</Form.Label>
-              <Form.Control
-                value={(config.mailbox as string) || "INBOX"}
-                onChange={(e) => set("mailbox", e.target.value)}
-              />
-            </Form.Group>
-          </Col>
-          <Col md={6}>
-            <Form.Group>
-              <Form.Label>Time Period</Form.Label>
-              <Form.Select
-                value={(config.period as string) || "last 7 days"}
-                onChange={(e) => set("period", e.target.value)}
-              >
-                {PERIOD_OPTIONS.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </Form.Select>
-            </Form.Group>
-          </Col>
-          <Col md={6}>
-            <Form.Group>
-              <Form.Label>
-                Topics <span className="text-muted fw-normal">(leave empty for AI to decide)</span>
-              </Form.Label>
-              <Form.Control
-                placeholder="Business & Finance, Technology & AI, ..."
-                value={topics.join(", ")}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  set("topics", val ? val.split(",").map((t) => t.trim()).filter(Boolean) : []);
-                }}
-              />
-            </Form.Group>
-          </Col>
-          <Col md={12}>
-            <Form.Group>
-              <Form.Label>
-                Scope <span className="text-muted fw-normal">("all" = everything, or describe a focus area)</span>
-              </Form.Label>
-              <Form.Control
-                placeholder='e.g. "all", "AI and machine learning", "client projects", "financial matters"'
-                value={(config.scope as string) || ""}
-                onChange={(e) => set("scope", e.target.value)}
-              />
-              <Form.Text className="text-muted">
-                When set, the AI will only categorize emails related to this scope and skip the rest.
-              </Form.Text>
-            </Form.Group>
-          </Col>
-        </Row>
-        {topics.length > 0 && (
-          <div className="mt-2">
-            {topics.map((t, i) => (
-              <Badge key={i} bg="secondary" className="me-1">{t}</Badge>
-            ))}
-          </div>
-        )}
-      </>
-    );
+    return <Type1EmailMonitorForm config={config} onChange={onChange} set={set} />;
   }
 
   // Transaction Data Analyzer
@@ -393,5 +318,179 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
         style={{ fontFamily: "monospace", fontSize: "0.9em" }}
       />
     </Form.Group>
+  );
+}
+
+
+// ── Type 1 Email Topic Monitor — apple_mail or gmail (Track B Phase B1) ──
+
+interface GmailAccountOption {
+  id: number;
+  email: string;
+  status: "active" | "disconnected" | "revoked";
+}
+
+interface Type1Props {
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+  set: (key: string, value: unknown) => void;
+}
+
+function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
+  const service = (config.service as string) || "apple_mail";
+  const topics = (config.topics as string[]) || [];
+
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [gmailError, setGmailError] = useState<string | null>(null);
+
+  // Lazy-fetch gmail accounts only when service=gmail. Avoids hitting the
+  // endpoint for the common apple_mail path.
+  useEffect(() => {
+    if (service !== "gmail") return;
+    setGmailLoading(true);
+    setGmailError(null);
+    axiosClient
+      .get<GmailAccountOption[]>("/gmail/accounts")
+      .then((res) => setGmailAccounts(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setGmailError(err?.response?.data?.detail || err?.message || "Failed to load Gmail accounts.");
+      })
+      .finally(() => setGmailLoading(false));
+  }, [service]);
+
+  const handleServiceChange = (newService: string) => {
+    // Switching service clears the per-service identifier so we don't carry
+    // an apple_mail account string into a gmail-flavored run (or vice versa).
+    const next = { ...config, service: newService };
+    delete next.account;
+    delete next.account_id;
+    onChange(next);
+  };
+
+  const activeGmailAccounts = gmailAccounts.filter((a) => a.status === "active");
+
+  return (
+    <>
+      <Row className="g-3">
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Email Service</Form.Label>
+            <Form.Select
+              value={service}
+              onChange={(e) => handleServiceChange(e.target.value)}
+            >
+              <option value="apple_mail">Apple Mail</option>
+              <option value="gmail">Gmail (Workspace)</option>
+            </Form.Select>
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>{service === "gmail" ? "Gmail Account" : "Mail Account"}</Form.Label>
+            {service === "gmail" ? (
+              <>
+                <Form.Select
+                  value={(config.account_id as number | undefined) ?? ""}
+                  onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
+                  disabled={gmailLoading || activeGmailAccounts.length === 0}
+                >
+                  <option value="">
+                    {gmailLoading
+                      ? "Loading…"
+                      : activeGmailAccounts.length === 0
+                      ? "(no accounts connected)"
+                      : "Select a connected account…"}
+                  </option>
+                  {activeGmailAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.email}</option>
+                  ))}
+                </Form.Select>
+                {gmailError && <Form.Text className="text-danger">{gmailError}</Form.Text>}
+                {!gmailLoading && !gmailError && activeGmailAccounts.length === 0 && (
+                  <Form.Text className="text-muted">
+                    No Gmail accounts connected yet — visit Connections to add one.
+                  </Form.Text>
+                )}
+              </>
+            ) : (
+              <Form.Select
+                value={(config.account as string) || "iCloud"}
+                onChange={(e) => set("account", e.target.value)}
+              >
+                {MAIL_ACCOUNTS.map((a) => (
+                  <option key={a.value} value={a.value}>{a.label}</option>
+                ))}
+              </Form.Select>
+            )}
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>{service === "gmail" ? "Label" : "Mailbox"}</Form.Label>
+            <Form.Control
+              value={(config.mailbox as string) || "INBOX"}
+              onChange={(e) => set("mailbox", e.target.value)}
+            />
+            {service === "gmail" && (
+              <Form.Text className="text-muted">
+                Gmail label id (e.g. INBOX, SPAM, or a custom label).
+              </Form.Text>
+            )}
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Time Period</Form.Label>
+            <Form.Select
+              value={(config.period as string) || "last 7 days"}
+              onChange={(e) => set("period", e.target.value)}
+            >
+              {PERIOD_OPTIONS.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </Form.Select>
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>
+              Topics <span className="text-muted fw-normal">(leave empty for AI to decide)</span>
+            </Form.Label>
+            <Form.Control
+              placeholder="Business & Finance, Technology & AI, ..."
+              value={topics.join(", ")}
+              onChange={(e) => {
+                const val = e.target.value;
+                set("topics", val ? val.split(",").map((t) => t.trim()).filter(Boolean) : []);
+              }}
+            />
+          </Form.Group>
+        </Col>
+        <Col md={12}>
+          <Form.Group>
+            <Form.Label>
+              Scope <span className="text-muted fw-normal">("all" = everything, or describe a focus area)</span>
+            </Form.Label>
+            <Form.Control
+              placeholder='e.g. "all", "AI and machine learning", "client projects", "financial matters"'
+              value={(config.scope as string) || ""}
+              onChange={(e) => set("scope", e.target.value)}
+            />
+            <Form.Text className="text-muted">
+              When set, the AI will only categorize emails related to this scope and skip the rest.
+            </Form.Text>
+          </Form.Group>
+        </Col>
+      </Row>
+      {topics.length > 0 && (
+        <div className="mt-2">
+          {topics.map((t, i) => (
+            <Badge key={i} bg="secondary" className="me-1">{t}</Badge>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
