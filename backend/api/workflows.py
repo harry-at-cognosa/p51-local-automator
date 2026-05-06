@@ -36,12 +36,15 @@ from backend.db.schemas import (
 )
 from backend.auth.users import current_active_user
 from backend.services import mcp_client
+from backend.services.logger_service import get_logger
 from backend.services.workflows.calendar_digest import run_calendar_digest
 from backend.services.workflows.data_analyzer import run_data_analyzer
 from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
 from backend.services.workflows.email_auto_reply_draft import run_email_auto_reply_draft
 from backend.services.workflows.email_monitor import run_email_monitor
 from backend.services.workflows.sql_runner import run_sql_runner
+
+log = get_logger("workflows_api")
 
 router_workflows = APIRouter()
 
@@ -453,6 +456,28 @@ async def _run_workflow_background(workflow_id: int):
         runner = WORKFLOW_RUNNERS.get(workflow.type_id)
         if not runner:
             return
+
+        # Per-workflow run lock (F5): if another run is already active for
+        # this workflow_id, skip silently. Covers (a) scheduled fires while a
+        # manual run is in flight, (b) manual triggers that slipped past
+        # trigger_run's pre-check via a tight race with another trigger.
+        # The DB partial unique index from F5.1 is the correctness backstop.
+        active_run_id = await session.scalar(
+            select(WorkflowRuns.run_id)
+            .where(
+                WorkflowRuns.workflow_id == workflow_id,
+                WorkflowRuns.status.in_(("pending", "running")),
+            )
+            .limit(1)
+        )
+        if active_run_id is not None:
+            log.info(
+                "workflow_run_skipped_already_active",
+                workflow_id=workflow_id,
+                active_run_id=active_run_id,
+            )
+            return
+
         await runner(session, workflow, trigger="manual")
 
 
