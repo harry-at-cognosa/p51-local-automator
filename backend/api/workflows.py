@@ -468,6 +468,24 @@ async def trigger_run(
     if workflow.type_id not in WORKFLOW_RUNNERS:
         raise HTTPException(status_code=400, detail=f"No runner for workflow type {workflow.type_id}")
 
+    # Per-workflow run lock (F5): refuse if an active run already exists.
+    # The DB has a partial unique index as the backstop, but the pre-check
+    # surfaces a friendly 409 with the existing run_id rather than relying
+    # on a constraint violation in the background task.
+    active_run_id = await session.scalar(
+        select(WorkflowRuns.run_id)
+        .where(
+            WorkflowRuns.workflow_id == workflow_id,
+            WorkflowRuns.status.in_(("pending", "running")),
+        )
+        .limit(1)
+    )
+    if active_run_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workflow already running (run #{active_run_id}); refusing to start a duplicate.",
+        )
+
     # Run in background so the API returns immediately
     background_tasks.add_task(_run_workflow_background, workflow_id)
 
