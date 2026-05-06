@@ -21,6 +21,9 @@ export default function SideMenu() {
         <LinkContainer to="/app/workflows">
           <Nav.Link>Workflows</Nav.Link>
         </LinkContainer>
+        <LinkContainer to="/app/connections">
+          <Nav.Link>Connections</Nav.Link>
+        </LinkContainer>
 
         {(auth.is_groupadmin || auth.is_superuser) && (
           <>
