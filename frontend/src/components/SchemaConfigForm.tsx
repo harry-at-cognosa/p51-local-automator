@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { Form, Row, Col, Badge, Button, InputGroup, Card } from "react-bootstrap";
 import FilePicker, { type FilePickerSelection } from "./FilePicker";
+import axiosClient from "../api/axiosClient";
 
 export interface FieldOption {
   value: string;
@@ -248,6 +249,12 @@ function FilePickerInput({
 
 type RowDict = Record<string, unknown>;
 
+interface FileListResponse {
+  root_path: string;
+  subpath: string;
+  entries: { name: string; kind: "file" | "dir"; size: number | null; modified: string }[];
+}
+
 function RepeatingRows({
   field,
   value,
@@ -265,6 +272,15 @@ function RepeatingRows({
     ? (value as RowDict[])
     : Array.from({ length: Math.max(minRows, 0) }, () => ({}));
 
+  // The folder-import convenience button appears only when the row_schema
+  // contains exactly one file_picker sub-field; with zero or multiple, the
+  // bulk-add target would be ambiguous.
+  const filePickerSubFields = rowSchema.filter((s) => s.type === "file_picker");
+  const filePickerSub = filePickerSubFields.length === 1 ? filePickerSubFields[0] : null;
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
   const updateRow = (idx: number, key: string, v: unknown) => {
     const next = rows.map((r, i) => (i === idx ? { ...r, [key]: v } : r));
     onChange(next);
@@ -278,6 +294,52 @@ function RepeatingRows({
   const deleteRow = (idx: number) => {
     if (rows.length <= minRows) return;
     onChange(rows.filter((_, i) => i !== idx));
+  };
+
+  const importFolder = async (selection: FilePickerSelection) => {
+    if (!filePickerSub) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const params = new URLSearchParams();
+      if (selection.path) params.set("subpath", selection.path);
+      if (filePickerSub.filter_extensions && filePickerSub.filter_extensions.length > 0) {
+        params.set("filter_extensions", filePickerSub.filter_extensions.join(","));
+      }
+      const qs = params.toString();
+      const res = await axiosClient.get<FileListResponse>(
+        `/files/list${qs ? `?${qs}` : ""}`,
+      );
+      const files = res.data.entries.filter((e) => e.kind === "file");
+      const slotsLeft = Math.max(0, maxRows - rows.length);
+      const toAdd = files.slice(0, slotsLeft);
+      if (toAdd.length === 0) {
+        setImportError(
+          files.length === 0
+            ? "Folder is empty (no matching files)."
+            : `Row cap reached (max ${maxRows}).`,
+        );
+        return;
+      }
+      const newRows: RowDict[] = toAdd.map((f) => ({
+        [filePickerSub.name]: {
+          path: selection.path ? `${selection.path}/${f.name}` : f.name,
+          name: f.name,
+        } as FilePickerSelection,
+      }));
+      onChange([...rows, ...newRows]);
+      if (files.length > toAdd.length) {
+        setImportError(
+          `Added ${toAdd.length} of ${files.length} files (cap ${maxRows}). Delete rows and re-import to pick a different subset.`,
+        );
+      }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      setImportError(err?.response?.data?.detail || err?.message || "Folder import failed");
+    } finally {
+      setImporting(false);
+      setShowFolderPicker(false);
+    }
   };
 
   const canAdd = rows.length < maxRows;
@@ -327,7 +389,7 @@ function RepeatingRows({
           </Card.Body>
         </Card>
       ))}
-      <div className="d-flex gap-2">
+      <div className="d-flex gap-2 flex-wrap">
         <Button
           size="sm"
           variant="outline-primary"
@@ -337,6 +399,24 @@ function RepeatingRows({
         >
           + {field.add_label ?? "Add row"}
         </Button>
+        {filePickerSub && (
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            onClick={() => {
+              setImportError(null);
+              setShowFolderPicker(true);
+            }}
+            disabled={!canAdd || importing}
+            title={
+              canAdd
+                ? "Pick a folder; adds one row per file inside"
+                : `Maximum ${maxRows} rows`
+            }
+          >
+            {importing ? "Importing…" : "Import folder"}
+          </Button>
+        )}
         {rows.length > 0 && (
           <span className="text-muted small align-self-center">
             {rows.length} {rows.length === 1 ? "row" : "rows"}
@@ -344,6 +424,18 @@ function RepeatingRows({
           </span>
         )}
       </div>
+      {importError && (
+        <div className="text-danger small mt-2">{importError}</div>
+      )}
+      {filePickerSub && (
+        <FilePicker
+          show={showFolderPicker}
+          mode="folder"
+          filterExtensions={filePickerSub.filter_extensions}
+          onSelect={importFolder}
+          onCancel={() => setShowFolderPicker(false)}
+        />
+      )}
     </div>
   );
 }
