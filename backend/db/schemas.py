@@ -303,6 +303,28 @@ class PendingEmailReplyActionRequest(BaseModel):
     final_body: str | None = None
 
 
+# ── Gmail schemas (Track B Phase B1) ─────────────────────────
+
+
+class GmailAccountRead(BaseModel):
+    """Public view of a connected Gmail account.
+
+    Deliberately omits the encrypted token columns. `scopes` is stored as
+    a space-separated string (Google OAuth convention); the frontend can
+    split for display.
+    """
+    id: int
+    email: str
+    status: str
+    scopes: str
+    created_at: datetime
+    last_used_at: datetime | None
+    access_token_expires_at: datetime | None
+
+    class Config:
+        from_attributes = True
+
+
 # ── Dashboard schemas ────────────────────────────────────────
 
 

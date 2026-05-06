@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import (
-    Boolean, DateTime, ForeignKey, Integer, JSON, Text, VARCHAR,
+    BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON,
+    LargeBinary, Text, VARCHAR,
     CheckConstraint, UniqueConstraint,
     func, text,
 )
@@ -342,3 +343,65 @@ class EmailAutoReplyLog(Base):
     __table_args__ = (
         UniqueConstraint("workflow_id", "source_message_id", name="uq_auto_reply_log_workflow_msg"),
     )
+
+
+class GmailAccounts(Base):
+    """Per-user OAuth-connected Gmail accounts (Track B Phase B1).
+
+    Refresh and access tokens are encrypted at rest via
+    backend/services/secrets.py (AES-GCM). status tracks the lifecycle:
+    'active' | 'disconnected' (refresh token revoked at Google) | 'revoked'
+    (user-initiated revoke).
+    """
+    __tablename__ = "gmail_accounts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("api_users.user_id", name="fk_gmail_accounts_user_id"),
+        nullable=False,
+    )
+    group_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("api_groups.group_id", name="fk_gmail_accounts_group_id"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
+    refresh_token_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    access_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default=text("'active'"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "email", name="uq_gmail_accounts_user_email"),
+    )
+
+
+class GmailTokenUsage(Base):
+    """Append-only audit log of Gmail API calls and OAuth lifecycle events.
+
+    workflow_id and run_id are nullable because OAuth events (connect,
+    refresh, revoke) fire outside any workflow context.
+    """
+    __tablename__ = "gmail_token_usage"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("gmail_accounts.id", name="fk_gmail_token_usage_account_id"),
+        nullable=False,
+    )
+    workflow_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
