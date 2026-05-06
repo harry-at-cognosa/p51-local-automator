@@ -6,9 +6,11 @@
  * 1–6 keep their hand-tuned forms in WorkflowConfigForm.tsx for now.
  *
  * Field types supported: string, multiline, number, date, string_list,
- * select, checkbox_list.
+ * select, checkbox_list, file_picker.
  */
-import { Form, Row, Col, Badge } from "react-bootstrap";
+import { useState } from "react";
+import { Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
+import FilePicker, { type FilePickerSelection } from "./FilePicker";
 
 export interface FieldOption {
   value: string;
@@ -26,7 +28,8 @@ export interface FieldDescriptor {
     | "date"
     | "string_list"
     | "select"
-    | "checkbox_list";
+    | "checkbox_list"
+    | "file_picker";
   default?: unknown;
   placeholder?: string;
   help?: string;
@@ -38,6 +41,7 @@ export interface FieldDescriptor {
   rows?: number;
   mono?: boolean;
   show_badges?: boolean;
+  filter_extensions?: string[];   // file_picker only
 }
 
 interface Props {
@@ -187,6 +191,9 @@ function renderInput(
       );
     }
 
+    case "file_picker":
+      return <FilePickerInput field={f} value={current} onChange={(v) => set(f.name, v)} />;
+
     default:
       return (
         <Form.Control
@@ -196,6 +203,45 @@ function renderInput(
         />
       );
   }
+}
+
+function FilePickerInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldDescriptor;
+  value: unknown;
+  onChange: (v: FilePickerSelection | null) => void;
+}) {
+  const [show, setShow] = useState(false);
+  const sel = (value as FilePickerSelection | null) || null;
+  const display = sel?.path || "No file selected";
+  return (
+    <>
+      <InputGroup>
+        <Form.Control readOnly value={display} placeholder={field.placeholder} />
+        <Button variant="outline-secondary" onClick={() => setShow(true)}>
+          Pick file
+        </Button>
+        {sel && (
+          <Button variant="outline-secondary" onClick={() => onChange(null)}>
+            Clear
+          </Button>
+        )}
+      </InputGroup>
+      <FilePicker
+        show={show}
+        mode="file"
+        filterExtensions={field.filter_extensions}
+        onSelect={(s) => {
+          onChange(s);
+          setShow(false);
+        }}
+        onCancel={() => setShow(false)}
+      />
+    </>
+  );
 }
 
 function renderBadges(current: unknown) {
