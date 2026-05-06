@@ -1,13 +1,15 @@
 """Email Topic Monitor Workflow
 
 Steps:
-1. Fetch emails from Apple Mail via MCP
+1. Fetch emails (Apple Mail via MCP, or Gmail via OAuth-connected account)
 2. Categorize emails using LLM (topic + urgency)
 3. Generate Excel report
 
 Config (from user_workflows.config):
-    account: str - Mail.app account name (e.g. "iCloud", "harry@cognosa.net")
-    mailbox: str - Mailbox name (default "INBOX")
+    service: str - "apple_mail" (default) or "gmail" (Track B Phase B1)
+    account: str - Mail.app account name (apple_mail only)
+    account_id: int - GmailAccounts.id (gmail only)
+    mailbox: str - Mailbox / Gmail label (default "INBOX")
     period: str - Time period (default "last 7 days")
     topics: list[str] - Topic names (empty = use defaults)
 """
@@ -15,10 +17,12 @@ import json
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services import mcp_client
+from backend.services import gmail_client
 from backend.services import llm_service
 from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
@@ -63,12 +67,35 @@ def parse_period(period: str) -> datetime:
 
 
 def parse_mail_date(date_str: str) -> datetime | None:
-    """Parse Apple Mail date format to datetime."""
-    # Format: "Wednesday, April 15, 2026 at 4:11:39 PM"
+    """Parse a message date string from either backend.
+
+    Handles Apple Mail's localized format ("Wednesday, April 15, 2026 at
+    4:11:39 PM") and Gmail's ISO 8601 format with timezone (produced by
+    gmail_client._normalize_date).
+    """
+    if not date_str:
+        return None
+    # Try ISO 8601 first (Gmail path).
+    try:
+        dt = datetime.fromisoformat(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, AttributeError):
+        pass
+    # Apple Mail format.
     try:
         cleaned = date_str.replace(" at ", " ")
         return datetime.strptime(cleaned, "%A, %B %d, %Y %I:%M:%S %p").replace(tzinfo=timezone.utc)
     except (ValueError, AttributeError):
+        pass
+    # Last resort: RFC 2822 (raw Gmail header, before normalization).
+    try:
+        dt = parsedate_to_datetime(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError):
         return None
 
 
@@ -79,21 +106,43 @@ async def run_email_monitor(
 ) -> WorkflowRuns:
     """Execute the full email monitoring pipeline."""
     config = workflow.config or {}
-    account = config.get("account", "iCloud")
+    service = config.get("service", "apple_mail")
     mailbox = config.get("mailbox", "INBOX")
     period = config.get("period", "last 7 days")
     topics = config.get("topics") or DEFAULT_TOPICS
     scope = config.get("scope", "")
 
+    if service not in ("apple_mail", "gmail"):
+        raise ValueError(f"Unsupported email service: {service!r}")
+
+    # Service-specific identifier for the source-account label in summaries.
+    if service == "gmail":
+        account_id = config.get("account_id")
+        if not isinstance(account_id, int):
+            raise ValueError(
+                "Gmail-flavored email_monitor needs an integer account_id "
+                "(the GmailAccounts.id of a connected account)."
+            )
+        source_label = f"gmail#{account_id}"
+    else:
+        account = config.get("account", "iCloud")
+        source_label = f"apple_mail/{account}"
+
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger, config=workflow.config)
     output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
     try:
-        # ── Step 1: Fetch emails from Apple Mail ──────────────
+        # ── Step 1: Fetch emails ──────────────────────────────
         step1 = await engine.start_step(session, run.run_id, 1, "Fetch emails")
 
         cutoff = parse_period(period)
-        messages = await mcp_client.mail_list_messages(account, mailbox, limit=100)
+        if service == "gmail":
+            messages = await gmail_client.gmail_list_messages(
+                session, account_id, mailbox=mailbox, limit=100,
+                workflow_id=workflow.workflow_id, run_id=run.run_id,
+            )
+        else:
+            messages = await mcp_client.mail_list_messages(account, mailbox, limit=100)
 
         # Filter by date
         filtered = []
@@ -120,7 +169,7 @@ async def run_email_monitor(
 
         await engine.complete_step(
             session, step1,
-            output_summary=f"Fetched {len(enriched)} emails from {account}/{mailbox} ({period})",
+            output_summary=f"Fetched {len(enriched)} emails from {source_label}/{mailbox} ({period})",
         )
 
         # ── Step 2: Categorize with LLM ──────────────────────
