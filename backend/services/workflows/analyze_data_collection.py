@@ -40,6 +40,13 @@ async def run_analyze_data_collection(
     inputs_dir = await engine.get_user_inputs_dir(
         session, workflow.group_id, workflow.user_id
     )
+    config = workflow.config or {}
+    token_budget = await engine.resolve_int_setting(
+        session,
+        group_id=workflow.group_id,
+        name=engine.SETTING_TOKEN_BUDGET,
+        user_override=config.get("token_budget") if isinstance(config.get("token_budget"), (int, str)) else None,
+    )
 
     ctx = SkillContext(run_id=run.run_id, artifacts_dir=output_dir)
 
@@ -49,6 +56,7 @@ async def run_analyze_data_collection(
         workflow=workflow,
         ctx=ctx,
         inputs_dir=inputs_dir,
+        token_budget=token_budget,
     )
 
     try:

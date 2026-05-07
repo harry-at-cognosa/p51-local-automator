@@ -26,6 +26,45 @@ log = get_logger("workflow_engine")
 
 
 SETTING_FILE_SYSTEM_ROOT = "file_system_root"
+SETTING_TOKEN_BUDGET = "token_budget"
+
+
+async def resolve_int_setting(
+    session: AsyncSession,
+    group_id: int,
+    name: str,
+    user_override: int | None = None,
+) -> int | None:
+    """Three-tier resolution for an integer setting.
+
+    Order: user-supplied override (e.g. workflow.config['<name>']) →
+    group_settings row → api_settings row → None.
+
+    Empty / non-numeric values at any tier are treated as not-set so
+    a misconfigured row falls through to the next tier rather than
+    raising. Use this for caps and timeouts where None means 'no cap'.
+    """
+    if isinstance(user_override, int) and user_override > 0:
+        return user_override
+    if isinstance(user_override, str) and user_override.strip().isdigit():
+        return int(user_override.strip())
+
+    group_value = await session.scalar(
+        select(GroupSettings.value).where(
+            GroupSettings.group_id == group_id,
+            GroupSettings.name == name,
+        )
+    )
+    if group_value and group_value.strip().isdigit():
+        return int(group_value.strip())
+
+    global_value = await session.scalar(
+        select(ApiSettings.value).where(ApiSettings.name == name)
+    )
+    if global_value and global_value.strip().isdigit():
+        return int(global_value.strip())
+
+    return None
 
 
 async def _resolve_file_system_root(session: AsyncSession, group_id: int) -> str:

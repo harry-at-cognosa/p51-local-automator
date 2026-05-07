@@ -159,6 +159,17 @@ def _content_blocks_to_dict(content: list[Any]) -> list[dict]:
 STAGES = ("ingest", "profile", "analyze", "synthesize", "audit", "scribe")
 
 
+class TokenBudgetExceeded(Exception):
+    """Raised when the run's accumulated token usage would exceed the
+    configured budget. Caught at run_all() so the engine can write a
+    partial-report artifact before propagating the failure."""
+
+    def __init__(self, used: int, budget: int):
+        self.used = used
+        self.budget = budget
+        super().__init__(f"token budget exceeded: used={used}, budget={budget}")
+
+
 class AgenticEngine:
     """Drives a single AWF-1 run through all six lifecycle stages.
 
@@ -175,6 +186,7 @@ class AgenticEngine:
         workflow: UserWorkflows,
         ctx: SkillContext,
         inputs_dir: str,
+        token_budget: int | None = None,
     ):
         self.session = session
         self.run = run
@@ -185,6 +197,9 @@ class AgenticEngine:
         # constructing the engine so the engine doesn't need DB access for
         # group_settings / api_settings lookup.
         self.inputs_dir = inputs_dir
+        # None means no cap. When set, _check_budget raises TokenBudgetExceeded
+        # before each new LLM call if total_tokens_used would otherwise grow.
+        self.token_budget = token_budget
         self._step_counter = 0
         self._current_stage: str | None = None
         # Per-stage rollup state. Populated as stages run; consumed by
@@ -195,6 +210,24 @@ class AgenticEngine:
         self.draft_report_path: str | None = None
         self.audit_critique: dict[str, list[str]] = {}
         self.final_report_path: str | None = None
+        # Cost tracking — accumulated across every LLM turn (analyze loop +
+        # synthesize + audit loop + scribe).
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cache_creation_tokens = 0
+        self.total_cache_read_tokens = 0
+
+    @property
+    def total_tokens_used(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+    def _check_budget(self) -> None:
+        """Raises TokenBudgetExceeded if the run is over its cap. Called
+        before each new LLM SDK call. The check is deliberately on
+        *already-used* tokens — a single in-flight call may push slightly
+        over, but the next call won't fire."""
+        if self.token_budget is not None and self.total_tokens_used >= self.token_budget:
+            raise TokenBudgetExceeded(self.total_tokens_used, self.token_budget)
 
     # ── step helpers ─────────────────────────────────────────────────
 
@@ -379,6 +412,13 @@ class AgenticEngine:
 
     # ── LLM-as-agent loop ────────────────────────────────────────────
 
+    def _accumulate_usage(self, usage: dict) -> None:
+        """Roll an SDK usage dict into the engine's running totals."""
+        self.total_input_tokens += int(usage.get("input_tokens", 0))
+        self.total_output_tokens += int(usage.get("output_tokens", 0))
+        self.total_cache_creation_tokens += int(usage.get("cache_creation_input_tokens", 0))
+        self.total_cache_read_tokens += int(usage.get("cache_read_input_tokens", 0))
+
     async def _record_llm_turn(
         self,
         *,
@@ -444,6 +484,7 @@ class AgenticEngine:
         final_text = ""
 
         for turn in range(1, max_turns + 1):
+            self._check_budget()
             response = client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
@@ -461,6 +502,7 @@ class AgenticEngine:
                     response.usage, "cache_read_input_tokens", 0
                 ),
             }
+            self._accumulate_usage(usage)
             text_blocks = [b.text for b in response.content if getattr(b, "type", None) == "text"]
             preview = "\n".join(text_blocks)[:500] if text_blocks else ""
             await self._record_llm_turn(
@@ -626,6 +668,7 @@ class AgenticEngine:
             )
 
             client = get_client()
+            self._check_budget()
             # Manually issued so we can write a single llm_turn row for this
             # stage rather than using _run_agent_loop (no tools here).
             response = client.messages.create(
@@ -648,6 +691,7 @@ class AgenticEngine:
                     response.usage, "cache_read_input_tokens", 0
                 ),
             }
+            self._accumulate_usage(usage)
             text_blocks = [b.text for b in response.content if getattr(b, "type", None) == "text"]
             draft_md = "\n\n".join(text_blocks).strip()
             # Strip any accidental code fences (the system prompt forbids them
@@ -884,16 +928,85 @@ class AgenticEngine:
 
         On clean exit, updates run.total_steps to match the actual step
         count (the create_run estimate of 6 stages would otherwise
-        understate the trajectory and confuse the UI progress bar)."""
+        understate the trajectory and confuse the UI progress bar).
+
+        If TokenBudgetExceeded fires during a stage, writes a partial
+        report artifact summarizing whatever stages completed before
+        re-raising so the runner can call fail_run."""
         from sqlalchemy import update as _update
         log.info("agentic_run_start", run_id=self.run.run_id, workflow_id=self.workflow.workflow_id)
-        for stage in STAGES:
-            method = getattr(self, f"stage_{stage}")
-            await method()
+        try:
+            for stage in STAGES:
+                method = getattr(self, f"stage_{stage}")
+                await method()
+        except TokenBudgetExceeded as e:
+            log.info("agentic_run_budget_exceeded", run_id=self.run.run_id, used=e.used, budget=e.budget)
+            await self._write_partial_report(reason=f"token budget exceeded ({e.used}/{e.budget})")
+            await self.session.execute(
+                _update(WorkflowRuns)
+                .where(WorkflowRuns.run_id == self.run.run_id)
+                .values(total_steps=self._step_counter)
+            )
+            await self.session.commit()
+            raise
         await self.session.execute(
             _update(WorkflowRuns)
             .where(WorkflowRuns.run_id == self.run.run_id)
             .values(total_steps=self._step_counter)
         )
         await self.session.commit()
-        log.info("agentic_run_complete", run_id=self.run.run_id, total_steps=self._step_counter)
+        log.info(
+            "agentic_run_complete",
+            run_id=self.run.run_id,
+            total_steps=self._step_counter,
+            tokens=self.total_tokens_used,
+            cache_read=self.total_cache_read_tokens,
+        )
+
+    async def _write_partial_report(self, *, reason: str) -> None:
+        """Best-effort markdown summary of whatever stages completed.
+        Saved as partial_report.md so the user has *something* to look
+        at after a budgeted-out or timed-out run.
+
+        Deterministic — no LLM call. Avoids charging more tokens after
+        the budget was exhausted."""
+        lines = [
+            "# Partial Report",
+            "",
+            f"**Reason run did not complete:** {reason}",
+            "",
+            f"- Tokens used: {self.total_tokens_used}",
+            f"- Cache reads: {self.total_cache_read_tokens}",
+            "",
+        ]
+        if self.profile_summary:
+            lines.append("## Tables loaded")
+            for tname, info in self.profile_summary.items():
+                shape = info.get("shape") or [0, 0]
+                desc = info.get("description") or ""
+                lines.append(f"- **{tname}** — {shape[0]} rows × {shape[1]} cols. {desc}")
+            lines.append("")
+        if self.analyze_findings:
+            lines.append("## Findings (analyze stage)")
+            for f in self.analyze_findings:
+                lines.append(f"- {f}")
+            lines.append("")
+        if self.draft_report_path and os.path.exists(self.draft_report_path):
+            lines.append("## Draft report (synthesize stage)")
+            lines.append("")
+            try:
+                with open(self.draft_report_path, encoding="utf-8") as fh:
+                    lines.append(fh.read())
+            except OSError as e:
+                lines.append(f"_(failed to read draft: {e})_")
+        # Best-effort: swallow any error from artifact write so we don't
+        # mask the original budget/timeout failure.
+        try:
+            await self._call_skill(
+                "write_artifact",
+                name="partial_report.md",
+                content="\n".join(lines),
+                kind="md",
+            )
+        except Exception as e:  # noqa: BLE001
+            log.error("partial_report_write_failed", error=str(e))
