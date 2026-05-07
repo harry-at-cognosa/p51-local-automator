@@ -52,6 +52,15 @@ Running list of decisions, enhancements, and ideas captured during architecture 
   - Frontend: surface the new fields in the typeId branches of `WorkflowConfigForm.tsx` and in the type 1 / type 3 `config_schema` migrations.
 - ~~**Per-workflow run lock**~~ — **shipped 2026-05-06** in Phase F5 (commits `phase F5.1` through `phase F5.5`). Postgres partial unique index on `workflow_runs(workflow_id) WHERE status IN ('pending','running')` enforces "one active run per workflow" at the DB. `trigger_run` and `_run_workflow_background` both pre-check and return 409 / log structured skip. Startup watchdog flips abandoned ('running' for >24h) rows to 'failed'. Frontend Run Now button surfaces the 409 message inline. Closes the auto-reply double-process race for types 5/6 as a side effect; mandatory for AWF-1 given run cost/duration.
 
+## Track A (Agentic workflows)
+
+- ~~**A1 — AWF-1 data model + spec freeze**~~ — **shipped 2026-05-07** in commits `phase A1.1`, `phase A1.2`, `phase A1.4`. New `workflow_types.schedulable` boolean column (default TRUE, existing six types inherit TRUE). New `agentic` workflow_categories row (sort 50). New `Analyze Data Collection` workflow_types row with `schedulable=FALSE` and a six-field `config_schema` (data_definition repeating_rows of file+description, analysis_goal, processing_steps with four-step boilerplate default, report_structure, voice_and_style, report_filename). SchemaConfigForm renders the new type without a hand-tuned branch. WorkflowDetail hides the schedule card when `type.schedulable === false` and disables Run Now with "Engine not yet built — coming in A3" tooltip when `type_name === "Analyze Data Collection"`. The type_name guard is removed in A3 when the engine ships.
+- **A2 — Skill contract + registry + initial deterministic skills** — next.
+- **A3 — Minimal engine, happy path** — depends on A2. Removes the `type_name === "Analyze Data Collection"` Run Now guard in WorkflowDetail.tsx as part of shipping.
+- **A4 — Audit + scribe stages** — depends on A3.
+- **A5 — Cost discipline** — depends on A3 (token budget, prompt caching, kill-switch).
+- **A6 — Final-report viewing polish** — depends on A3.
+
 ## Track B (Gmail / Workspace)
 
 - ~~**B1 — Read-only Gmail for Type 1**~~ — **shipped 2026-05-06** in commits `phase B1.1` through `phase B1.10`. Per-customer GCP project model. New tables `gmail_accounts` + `gmail_token_usage`; AES-GCM encryption helper at `backend/services/secrets.py` (TOKEN_ENCRYPTION_KEY env var). OAuth flow at `/api/v1/gmail/oauth/{start,callback}` with state JWT signed by SECRET. Read-only `gmail_client.py` mirrors mcp_client.mail_* shape. `email_monitor.py` branches on `config.service`: apple_mail (existing) or gmail (new account_id-driven). Frontend Connections page + side menu link. Type 1 form gains service+gmail-account picker. Backend boots clean without `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` set; OAuth start returns 503 until configured.

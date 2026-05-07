@@ -37,6 +37,8 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 - Roles: superuser > groupadmin > manager > employee
 - Output files: `<file_system_root>/{group_id}/{user_id}/{workflow_id}/{run_id}/` (resolved per Phase 1.4 chain: group_settings → api_settings → error)
 - User input files: `<file_system_root>/{group_id}/{user_id}/inputs/` — per-user sandbox surfaced to the workflow config UI by the `GET /api/v1/files/list` endpoint and the `<FilePicker>` component. Reusable across all workflows owned by that user.
+- `workflow_types.schedulable` (added in A1.1, default TRUE): per-type flag. FALSE for cron-incompatible types (e.g. AWF-1 "Analyze Data Collection" — too expensive/slow to fire from cron). Frontend hides schedule UI when false.
+- New workflow types should ship with a populated `config_schema` and let the schema-driven `SchemaConfigForm` render their config UI rather than adding another typeId branch in `WorkflowConfigForm.tsx`. Types 1–6 keep their hand-tuned forms; AWF-1 (type 7) is the first schema-only type.
 
 ## Database
 
