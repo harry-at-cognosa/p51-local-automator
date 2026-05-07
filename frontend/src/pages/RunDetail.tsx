@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { Container, Card, Badge, Table, Button, Spinner, Alert } from "react-bootstrap";
 import StatusBadge from "../components/StatusBadge";
 import ConfigSnapshotPanel from "../components/ConfigSnapshotPanel";
+import MarkdownRender from "../components/MarkdownRender";
 import type { FieldDescriptor } from "../components/SchemaConfigForm";
 import axiosClient from "../api/axiosClient";
 
@@ -55,12 +56,43 @@ export default function RunDetail() {
   const [artifacts, setArtifacts] = useState<WorkflowArtifact[]>([]);
 
   const [error, setError] = useState("");
+  const [draftReport, setDraftReport] = useState<string | null>(null);
 
   useEffect(() => {
     axiosClient.get(`/runs/${runId}`).then((res) => setRun(res.data)).catch((e) => setError(`Failed to load run: ${e.message}`));
     axiosClient.get(`/runs/${runId}/steps`).then((res) => setSteps(res.data)).catch(() => {});
     axiosClient.get(`/runs/${runId}/artifacts`).then((res) => setArtifacts(res.data)).catch(() => {});
   }, [runId]);
+
+  // Fetch draft_report.md text content when an artifact with that name is
+  // present. Surfaces inline below the artifacts table for AWF-1 runs.
+  useEffect(() => {
+    const draft = artifacts.find((a) =>
+      a.file_path.endsWith("/draft_report.md") && a.file_exists
+    );
+    if (!draft) {
+      setDraftReport(null);
+      return;
+    }
+    axiosClient
+      .get(`/artifacts/${draft.artifact_id}/download`, { responseType: "text" })
+      .then((res) => setDraftReport(typeof res.data === "string" ? res.data : String(res.data)))
+      .catch(() => setDraftReport(null));
+  }, [artifacts]);
+
+  // Build a chart-name -> download URL map so the markdown renderer can
+  // resolve relative ![alt](chart.png) references in the draft.
+  const chartUrlByName = (() => {
+    const map: Record<string, string> = {};
+    const token = localStorage.getItem("token");
+    for (const a of artifacts) {
+      if (a.file_type === "png" && a.file_exists) {
+        const name = a.file_path.split("/").pop() || "";
+        map[name] = `/api/v1/artifacts/${a.artifact_id}/download?token=${token}`;
+      }
+    }
+    return map;
+  })();
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -209,6 +241,18 @@ export default function RunDetail() {
                 ))}
               </tbody>
             </Table>
+          </Card.Body>
+        </Card>
+      )}
+
+      {draftReport !== null && (
+        <Card className="mt-3">
+          <Card.Header>Draft Report</Card.Header>
+          <Card.Body>
+            <MarkdownRender
+              source={draftReport}
+              resolveImage={(src) => chartUrlByName[src]}
+            />
           </Card.Body>
         </Card>
       )}
