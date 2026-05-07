@@ -105,3 +105,23 @@ def decrypt(blob: bytes) -> str:
             "stored secret cannot be recovered — re-encrypt with the new key."
         ) from e
     return plaintext.decode("utf-8")
+
+
+def encrypt_to_b64(plaintext: str) -> str:
+    """Encrypt and return a base64 string, suitable for storing in a JSON field.
+
+    JSON can't carry raw bytes — base64 is the standard encoding for
+    embedding the output of :func:`encrypt` in a JSON config column.
+    """
+    return base64.b64encode(encrypt(plaintext)).decode("ascii")
+
+
+def decrypt_from_b64(b64_str: str) -> str:
+    """Inverse of :func:`encrypt_to_b64`."""
+    if not isinstance(b64_str, str):
+        raise TypeError("decrypt_from_b64() expects a str")
+    try:
+        blob = base64.b64decode(b64_str)
+    except Exception as e:
+        raise RuntimeError(f"value is not valid base64: {e}") from e
+    return decrypt(blob)

@@ -6,9 +6,16 @@ Steps:
 3. Save results as CSV/Excel
 
 Config (from user_workflows.config):
-    connection_string: str - SQLAlchemy connection string
+    connection_string_enc: str - Base64-encoded encrypted connection string (preferred)
+    connection_string: str - Plaintext SQLAlchemy connection string (legacy, deprecated)
     query: str - SQL query to execute
     query_name: str - Optional name for the query
+
+Phase T4 (2026-05-06) introduced encrypted-at-rest storage for the
+connection string. The runner reads `connection_string_enc` if present
+and falls back to the legacy plaintext `connection_string` for any
+rows not yet migrated. A separate Alembic data migration encrypts
+existing plaintext rows.
 """
 import json
 import os
@@ -20,6 +27,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services import llm_service
+from backend.services import secrets as crypto
 from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
 from backend.db.models import UserWorkflows, WorkflowRuns
@@ -39,6 +47,19 @@ def validate_readonly(sql: str) -> bool:
     return True
 
 
+def resolve_connection_string(config: dict) -> str:
+    """Return the plaintext connection string from a type-4 config.
+
+    Prefers `connection_string_enc` (encrypted-at-rest, the new format).
+    Falls back to legacy plaintext `connection_string` for rows not yet
+    migrated. Returns "" if neither is present.
+    """
+    enc = config.get("connection_string_enc")
+    if enc:
+        return crypto.decrypt_from_b64(enc)
+    return config.get("connection_string", "")
+
+
 async def run_sql_runner(
     session: AsyncSession,
     workflow: UserWorkflows,
@@ -46,7 +67,7 @@ async def run_sql_runner(
 ) -> WorkflowRuns:
     """Execute SQL query and analyze results."""
     config = workflow.config or {}
-    connection_string = config.get("connection_string", "")
+    connection_string = resolve_connection_string(config)
     query = config.get("query", "")
     query_name = config.get("query_name", "query")
 
