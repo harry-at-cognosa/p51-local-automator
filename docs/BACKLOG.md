@@ -58,7 +58,7 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - **B2 — Gmail send/draft for types 5 & 6** — depends on B1 + type 4 secrets reuse. Adds `gmail.send` and `gmail.compose` scopes; existing OAuth flow upgrades scope on re-consent. Send/save-draft logic in `email_auto_reply_*.py` branches on `service`. Pending-reply approval queue dispatch becomes service-aware.
 - **B3 — Domain-wide delegation** (deferred). Per Track B scoping doc; revisit when a Workspace customer asks.
 - **B4 — Consumer @gmail.com support** (deferred indefinitely).
-- **Type 4 connection_string encryption** — small follow-on phase. Reuse `backend/services/secrets.py` to wrap the plaintext `connection_string` in user_workflows.config for type 4 (SQL Query Runner). Migrate existing rows opportunistically on next workflow edit.
+- ~~**Type 4 connection_string encryption**~~ — **shipped 2026-05-06** in commits `phase T4.1` through `phase T4.5`. New `connection_string_enc` JSON field stores AES-GCM ciphertext (base64) via `secrets.encrypt_to_b64`. API encrypts plaintext on workflow create/update and preserves existing encrypted value when the form's plaintext field is left blank. `sql_runner.resolve_connection_string` decrypts on use; falls back to plaintext for any rows not yet migrated. Alembic migration `b8e5d3f1a4c7` walked existing type-4 rows. Form shows "(stored — leave blank to keep, or type to replace)" when an encrypted value is present.
 
 ## Notes
 
