@@ -36,6 +36,7 @@ from backend.db.schemas import (
 )
 from backend.auth.users import current_active_user
 from backend.services import mcp_client
+from backend.services import secrets as crypto
 from backend.services.logger_service import get_logger
 from backend.services.workflows.calendar_digest import run_calendar_digest
 from backend.services.workflows.data_analyzer import run_data_analyzer
@@ -47,6 +48,34 @@ from backend.services.workflows.sql_runner import run_sql_runner
 log = get_logger("workflows_api")
 
 router_workflows = APIRouter()
+
+
+def _normalize_secrets_in_config(
+    config: dict | None,
+    type_id: int,
+    existing_config: dict | None = None,
+) -> dict | None:
+    """Transform plaintext secrets into encrypted form before persisting.
+
+    For type 4 (SQL Query Runner): a non-empty plaintext `connection_string`
+    is encrypted via secrets.encrypt_to_b64 and stored under
+    `connection_string_enc`. The plaintext key is dropped. An empty
+    plaintext during an update preserves any existing
+    `connection_string_enc` from the prior config — so editing
+    unrelated fields (query, query_name) doesn't wipe the secret.
+
+    For other types: passthrough.
+    """
+    if type_id != 4 or not config:
+        return config
+    config = dict(config)
+    cs = config.get("connection_string", "")
+    if cs:
+        config["connection_string_enc"] = crypto.encrypt_to_b64(cs)
+    elif existing_config and existing_config.get("connection_string_enc"):
+        config["connection_string_enc"] = existing_config["connection_string_enc"]
+    config.pop("connection_string", None)
+    return config
 
 
 # ── Workflow Categories (catalog) ─────────────────────────────
@@ -250,12 +279,14 @@ async def create_workflow(
     if not wf_type or not wf_type.enabled:
         raise HTTPException(status_code=404, detail="Workflow type not found")
 
+    config = _normalize_secrets_in_config(body.config, body.type_id)
+
     workflow = UserWorkflows(
         user_id=user.user_id,
         group_id=user.group_id,
         type_id=body.type_id,
         name=body.name,
-        config=body.config,
+        config=config,
         schedule=body.schedule,
         enabled=body.enabled,
     )
@@ -356,8 +387,11 @@ async def update_workflow(
     session: AsyncSession = Depends(async_get_session),
 ):
     workflow = await _load_workflow_with_type(session, workflow_id, user)
+    existing_config = dict(workflow.config) if workflow.config else {}
 
     for field, value in body.model_dump(exclude_unset=True).items():
+        if field == "config" and value is not None:
+            value = _normalize_secrets_in_config(value, workflow.type_id, existing_config)
         setattr(workflow, field, value)
 
     await session.commit()
