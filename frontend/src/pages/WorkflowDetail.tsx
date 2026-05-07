@@ -16,10 +16,12 @@ interface WorkflowCategoryNested {
 
 interface WorkflowTypeNested {
   type_id: number;
+  type_name?: string;
   short_name: string;
   long_name: string;
   category: WorkflowCategoryNested;
   config_schema?: unknown[] | null;
+  schedulable?: boolean;
 }
 
 interface UserWorkflow {
@@ -208,10 +210,18 @@ export default function WorkflowDetail() {
               )}
             </Button>
           )}
+          {/* AWF-1 ("Analyze Data Collection") has no engine yet; the
+              Run Now button is disabled with explanatory tooltip until
+              A3 lands. Remove the type_name guard once A3 ships. */}
           <Button
             variant="success"
             onClick={triggerRun}
-            disabled={running}
+            disabled={running || workflow.type?.type_name === "Analyze Data Collection"}
+            title={
+              workflow.type?.type_name === "Analyze Data Collection"
+                ? "Engine not yet built — coming in A3"
+                : undefined
+            }
           >
             {running ? <><Spinner size="sm" animation="border" className="me-1" /> Running...</> : "Run Now"}
           </Button>
@@ -263,7 +273,7 @@ export default function WorkflowDetail() {
         </Card.Body>
       </Card>
 
-      {workflow.schedule && (
+      {workflow.schedule && workflow.type?.schedulable !== false && (
         <Card className="mt-3">
           <Card.Header>Schedule</Card.Header>
           <Card.Body>
