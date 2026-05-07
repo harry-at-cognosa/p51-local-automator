@@ -375,7 +375,7 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
   const handleServiceChange = (newService: string) => {
     // Switching service clears the per-service identifier so we don't carry
     // an apple_mail account string into a gmail-flavored run (or vice versa).
-    const next = { ...config, service: newService };
+    const next: Record<string, unknown> = { ...config, service: newService };
     delete next.account;
     delete next.account_id;
     onChange(next);
