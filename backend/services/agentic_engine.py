@@ -22,6 +22,7 @@ markers for audit/scribe. A4 will replace the no-ops.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -170,6 +171,23 @@ class TokenBudgetExceeded(Exception):
         super().__init__(f"token budget exceeded: used={used}, budget={budget}")
 
 
+class StageTimedOut(Exception):
+    """Raised when a stage exceeds its wall-time budget. Caught at
+    run_all() the same way as TokenBudgetExceeded."""
+
+    def __init__(self, stage: str, timeout_seconds: int):
+        self.stage = stage
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"stage {stage!r} timed out after {timeout_seconds}s")
+
+
+# Default per-stage wall-time cap (seconds). Generous enough that the
+# longest plausible analyze loop fits, tight enough that a hung stage
+# doesn't burn API budget for hours. Overridable via
+# config.stage_timeout_seconds (resolution chain identical to token_budget).
+DEFAULT_STAGE_TIMEOUT_SECONDS = 600
+
+
 class AgenticEngine:
     """Drives a single AWF-1 run through all six lifecycle stages.
 
@@ -187,6 +205,7 @@ class AgenticEngine:
         ctx: SkillContext,
         inputs_dir: str,
         token_budget: int | None = None,
+        stage_timeout_seconds: int | None = DEFAULT_STAGE_TIMEOUT_SECONDS,
     ):
         self.session = session
         self.run = run
@@ -200,6 +219,8 @@ class AgenticEngine:
         # None means no cap. When set, _check_budget raises TokenBudgetExceeded
         # before each new LLM call if total_tokens_used would otherwise grow.
         self.token_budget = token_budget
+        # Per-stage wall-time cap. None disables the timeout (debugging).
+        self.stage_timeout_seconds = stage_timeout_seconds
         self._step_counter = 0
         self._current_stage: str | None = None
         # Per-stage rollup state. Populated as stages run; consumed by
@@ -937,11 +958,25 @@ class AgenticEngine:
         log.info("agentic_run_start", run_id=self.run.run_id, workflow_id=self.workflow.workflow_id)
         try:
             for stage in STAGES:
-                method = getattr(self, f"stage_{stage}")
-                await method()
+                await self._run_stage_with_timeout(stage)
         except TokenBudgetExceeded as e:
             log.info("agentic_run_budget_exceeded", run_id=self.run.run_id, used=e.used, budget=e.budget)
             await self._write_partial_report(reason=f"token budget exceeded ({e.used}/{e.budget})")
+            await self.session.execute(
+                _update(WorkflowRuns)
+                .where(WorkflowRuns.run_id == self.run.run_id)
+                .values(total_steps=self._step_counter)
+            )
+            await self.session.commit()
+            raise
+        except StageTimedOut as e:
+            log.info(
+                "agentic_run_stage_timeout",
+                run_id=self.run.run_id, stage=e.stage, seconds=e.timeout_seconds,
+            )
+            await self._write_partial_report(
+                reason=f"stage {e.stage!r} timed out after {e.timeout_seconds}s",
+            )
             await self.session.execute(
                 _update(WorkflowRuns)
                 .where(WorkflowRuns.run_id == self.run.run_id)
@@ -962,6 +997,28 @@ class AgenticEngine:
             tokens=self.total_tokens_used,
             cache_read=self.total_cache_read_tokens,
         )
+
+    async def _run_stage_with_timeout(self, stage: str) -> None:
+        """Run one stage method, optionally bounded by stage_timeout_seconds.
+        On TimeoutError: write an explicit timeout marker step row and
+        raise StageTimedOut so run_all can finalize the run."""
+        method = getattr(self, f"stage_{stage}")
+        if self.stage_timeout_seconds is None:
+            await method()
+            return
+        try:
+            await asyncio.wait_for(method(), timeout=self.stage_timeout_seconds)
+        except asyncio.TimeoutError:
+            timeout_marker = await self._start(
+                step_name=f"[{stage}] timed out after {self.stage_timeout_seconds}s",
+                stage=stage,
+                kind="stage_marker",
+            )
+            await engine.fail_step(
+                self.session, timeout_marker,
+                error=f"stage {stage!r} exceeded {self.stage_timeout_seconds}s wall time",
+            )
+            raise StageTimedOut(stage, self.stage_timeout_seconds)
 
     async def _write_partial_report(self, *, reason: str) -> None:
         """Best-effort markdown summary of whatever stages completed.

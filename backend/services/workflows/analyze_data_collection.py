@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import UserWorkflows, WorkflowRuns
 from backend.services import workflow_engine as engine
-from backend.services.agentic_engine import AgenticEngine, STAGES
+from backend.services.agentic_engine import (
+    AgenticEngine,
+    DEFAULT_STAGE_TIMEOUT_SECONDS,
+    STAGES,
+)
 from backend.services.logger_service import get_logger
 from backend.services.skills import SkillContext
 
@@ -47,6 +51,18 @@ async def run_analyze_data_collection(
         name=engine.SETTING_TOKEN_BUDGET,
         user_override=config.get("token_budget") if isinstance(config.get("token_budget"), (int, str)) else None,
     )
+    stage_timeout = await engine.resolve_int_setting(
+        session,
+        group_id=workflow.group_id,
+        name="stage_timeout_seconds",
+        user_override=(
+            config.get("stage_timeout_seconds")
+            if isinstance(config.get("stage_timeout_seconds"), (int, str))
+            else None
+        ),
+    )
+    if stage_timeout is None:
+        stage_timeout = DEFAULT_STAGE_TIMEOUT_SECONDS
 
     ctx = SkillContext(run_id=run.run_id, artifacts_dir=output_dir)
 
@@ -57,6 +73,7 @@ async def run_analyze_data_collection(
         ctx=ctx,
         inputs_dir=inputs_dir,
         token_budget=token_budget,
+        stage_timeout_seconds=stage_timeout,
     )
 
     try:
