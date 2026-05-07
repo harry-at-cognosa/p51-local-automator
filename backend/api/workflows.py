@@ -39,6 +39,7 @@ from backend.services import mcp_client
 from backend.services import secrets as crypto
 from backend.services.logger_service import get_logger
 from backend.services.workflows.calendar_digest import run_calendar_digest
+from backend.services.workflows.analyze_data_collection import run_analyze_data_collection
 from backend.services.workflows.data_analyzer import run_data_analyzer
 from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
 from backend.services.workflows.email_auto_reply_draft import run_email_auto_reply_draft
@@ -477,6 +478,7 @@ WORKFLOW_RUNNERS = {
     4: run_sql_runner,
     5: run_email_auto_reply_draft,
     6: run_email_auto_reply_approve,
+    7: run_analyze_data_collection,
 }
 
 

@@ -210,18 +210,10 @@ export default function WorkflowDetail() {
               )}
             </Button>
           )}
-          {/* AWF-1 ("Analyze Data Collection") has no engine yet; the
-              Run Now button is disabled with explanatory tooltip until
-              A3 lands. Remove the type_name guard once A3 ships. */}
           <Button
             variant="success"
             onClick={triggerRun}
-            disabled={running || workflow.type?.type_name === "Analyze Data Collection"}
-            title={
-              workflow.type?.type_name === "Analyze Data Collection"
-                ? "Engine not yet built — coming in A3"
-                : undefined
-            }
+            disabled={running}
           >
             {running ? <><Spinner size="sm" animation="border" className="me-1" /> Running...</> : "Run Now"}
           </Button>

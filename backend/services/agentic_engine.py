@@ -645,9 +645,20 @@ class AgenticEngine:
 
     async def run_all(self) -> None:
         """Drive all six stages in order. Caller wraps this in try/except
-        and calls workflow_engine.complete_run / fail_run as appropriate."""
+        and calls workflow_engine.complete_run / fail_run as appropriate.
+
+        On clean exit, updates run.total_steps to match the actual step
+        count (the create_run estimate of 6 stages would otherwise
+        understate the trajectory and confuse the UI progress bar)."""
+        from sqlalchemy import update as _update
         log.info("agentic_run_start", run_id=self.run.run_id, workflow_id=self.workflow.workflow_id)
         for stage in STAGES:
             method = getattr(self, f"stage_{stage}")
             await method()
+        await self.session.execute(
+            _update(WorkflowRuns)
+            .where(WorkflowRuns.run_id == self.run.run_id)
+            .values(total_steps=self._step_counter)
+        )
+        await self.session.commit()
         log.info("agentic_run_complete", run_id=self.run.run_id, total_steps=self._step_counter)
