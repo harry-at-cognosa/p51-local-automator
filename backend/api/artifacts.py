@@ -31,7 +31,17 @@ def _build_download_filename(
 
     Timestamp comes from the run's started_at (local time).
     The original filename is sanitized to keep the prefix readable.
+
+    Exception: AWF-1 polished final reports already carry their own
+    user-facing filename (`<slug>_<YYMMDD>_FinalReport.md`); for those
+    we hand back the original name verbatim so customers download a
+    file named for the report rather than the run metadata. Charts
+    and intermediate artifacts keep the standard prefix.
     """
+    if original_filename.endswith("_FinalReport.md"):
+        # Sanitize the stem only so the .md extension survives.
+        stem = _sanitize_filename_segment(original_filename[:-3])
+        return f"{stem}.md"
     ts = started_at.strftime("%y%m%d_%H%M%S")
     safe = _sanitize_filename_segment(original_filename)
     return f"{ts}_run_{run_id}_uwf_{workflow_id}_cat_{category_id}_type_{type_id}_{safe}"
