@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 dist/
 .env
+dot-env-*.txt
 *.db
 node_modules/
 frontend/dist/
