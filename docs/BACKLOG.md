@@ -60,6 +60,10 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - **A4 — Audit + scribe stages** — next.
 - **A5 — Cost discipline** — depends on A4 (token budget, prompt caching, kill-switch).
 - **A6 — Final-report viewing polish** — depends on A4.
+- **Profile stage — wide-table column selection** — captured 2026-05-07 after the first AWF-1 run produced 88 `describe_column` step rows for two wide Amazon transaction tables. Three approaches (in order of preference):
+  1. **LLM-driven smart selection** (best): a pre-profile LLM call receives `analysis_goal` + `processing_steps` + each table's `(name, columns, descriptions)` and returns a ranked subset of columns to profile. The combo of "what we're studying / why" + attribute names is usually enough to identify which columns matter for the goal. Skipped columns can still be pulled on demand via `describe_column` from the analyze-stage tool surface.
+  2. **Batched skill**: a new `describe_table` skill that returns stats for all columns in one call → one workflow_steps row per table instead of one per column. Cheap to implement; cuts row noise but doesn't reduce work.
+  3. **Heuristic sampling** when column count > N: profile a representative subset (mix of high-cardinality, high-null, and obvious key-looking names). Fallback if LLM selection is unavailable.
 
 ## Track B (Gmail / Workspace)
 
