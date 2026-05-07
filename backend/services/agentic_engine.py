@@ -203,6 +203,7 @@ class AgenticEngine:
             await engine.complete_step(
                 self.session, step, output_summary=_truncate_summary(result)
             )
+            await self._maybe_record_artifact(step.step_id, skill_name, result)
             return result
         except Exception as e:  # noqa: BLE001 - intentional broad catch per on_failure policy
             err = f"{type(e).__name__}: {e}"
@@ -223,6 +224,29 @@ class AgenticEngine:
                 raise
             log.info("skill_skipped_after_error", skill=skill_name, error=err)
             return None
+
+    async def _maybe_record_artifact(
+        self, step_id: int, skill_name: str, result: Any
+    ) -> None:
+        """If a skill returns a {path, kind, ...} payload, register a
+        workflow_artifacts row pointing at the file. Charts and
+        write_artifact use this convention; descriptive stats don't."""
+        if not isinstance(result, dict):
+            return
+        path = result.get("path")
+        kind = result.get("kind")
+        if not (isinstance(path, str) and isinstance(kind, str)):
+            return
+        if not os.path.exists(path):
+            return
+        await engine.record_artifact(
+            self.session,
+            run_id=self.run.run_id,
+            step_id=step_id,
+            file_path=path,
+            file_type=kind,
+            description=f"produced by {skill_name}",
+        )
 
     @staticmethod
     def _table_name_for_row(index: int) -> str:
@@ -499,10 +523,110 @@ class AgenticEngine:
             raise
 
     async def stage_synthesize(self) -> None:
-        marker = await self._stage_marker_start("synthesize")
+        """Single LLM call (no tools) that produces a markdown draft report.
+        Saved as draft_report.md and registered as a workflow_artifact."""
+        marker = await self._enter_stage("synthesize")
         try:
-            # A3.4: single LLM call producing draft_report.md
-            await self._stage_marker_complete(marker, summary="(synthesize stub — A3.4)")
+            from backend.services.llm_service import get_client  # lazy
+
+            cfg = self.workflow.config or {}
+            goal = (cfg.get("analysis_goal") or "").strip()
+            report_structure = (cfg.get("report_structure") or "").strip()
+
+            # Surface the charts produced during analyze so the model can
+            # cite them by filename in the draft.
+            chart_files = sorted(
+                f for f in os.listdir(self.ctx.artifacts_dir)
+                if os.path.isfile(os.path.join(self.ctx.artifacts_dir, f))
+                and f.lower().endswith(".png")
+            ) if os.path.isdir(self.ctx.artifacts_dir) else []
+
+            system = (
+                "You are a technical writer. You will receive an analyst's "
+                "findings, a description of the data, and a structural outline. "
+                "Produce a markdown report that addresses the stated goal. "
+                "Reference any chart files by their filename using markdown "
+                "image syntax: ![caption](filename.png). Keep the prose tight; "
+                "no preamble or sign-off. Output ONLY the markdown — no fences, "
+                "no surrounding commentary."
+            )
+
+            user_prompt = (
+                f"## Analysis goal\n{goal}\n\n"
+                f"## Requested report structure\n"
+                f"{report_structure or '(no structure specified — use your judgment)'}\n\n"
+                f"## Tables\n```json\n"
+                f"{json.dumps({k: v.get('description', '') for k, v in self.profile_summary.items()}, indent=2)}\n"
+                f"```\n\n"
+                f"## Findings from analysis\n"
+                + ("\n".join(f"- {f}" for f in self.analyze_findings)
+                   if self.analyze_findings else "(no structured findings — synthesize from the profile summary)")
+                + "\n\n"
+                f"## Chart files available\n"
+                + ("\n".join(f"- {f}" for f in chart_files) if chart_files else "(none)")
+                + "\n\n"
+                f"## Profile summary (compact)\n```json\n"
+                f"{json.dumps(self.profile_summary, indent=2, default=str)[:6000]}\n"
+                f"```\n\n"
+                "Write the markdown report now."
+            )
+
+            client = get_client()
+            # Manually issued so we can write a single llm_turn row for this
+            # stage rather than using _run_agent_loop (no tools here).
+            response = client.messages.create(
+                model=DEFAULT_REASONING_MODEL,
+                max_tokens=4096,
+                system=[{
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "cache_creation_input_tokens": getattr(
+                    response.usage, "cache_creation_input_tokens", 0
+                ),
+                "cache_read_input_tokens": getattr(
+                    response.usage, "cache_read_input_tokens", 0
+                ),
+            }
+            text_blocks = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+            draft_md = "\n\n".join(text_blocks).strip()
+            # Strip any accidental code fences (the system prompt forbids them
+            # but models occasionally add anyway).
+            if draft_md.startswith("```"):
+                lines = draft_md.split("\n")
+                draft_md = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+            await self._record_llm_turn(
+                stage="synthesize",
+                purpose="draft report",
+                usage=usage,
+                stop_reason=response.stop_reason,
+                text_preview=draft_md[:500],
+            )
+
+            # Persist the draft via write_artifact (records its own
+            # skill_call row + workflow_artifacts row via _maybe_record).
+            artifact = await self._call_skill(
+                "write_artifact",
+                name="draft_report.md",
+                content=draft_md,
+                kind="md",
+            )
+            self.draft_report_path = artifact["path"] if artifact else None
+            await self._stage_marker_complete(
+                marker,
+                summary=_truncate_summary({
+                    "draft_path": self.draft_report_path,
+                    "tokens": int(usage["input_tokens"]) + int(usage["output_tokens"]),
+                    "char_count": len(draft_md),
+                }),
+            )
         except Exception as e:
             await self._stage_marker_fail(marker, f"synthesize failed: {e}")
             raise
