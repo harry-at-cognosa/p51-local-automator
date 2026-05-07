@@ -56,7 +56,8 @@ export default function RunDetail() {
   const [artifacts, setArtifacts] = useState<WorkflowArtifact[]>([]);
 
   const [error, setError] = useState("");
-  const [draftReport, setDraftReport] = useState<string | null>(null);
+  const [reportMd, setReportMd] = useState<string | null>(null);
+  const [reportLabel, setReportLabel] = useState<"final" | "draft" | null>(null);
 
   useEffect(() => {
     axiosClient.get(`/runs/${runId}`).then((res) => setRun(res.data)).catch((e) => setError(`Failed to load run: ${e.message}`));
@@ -64,20 +65,27 @@ export default function RunDetail() {
     axiosClient.get(`/runs/${runId}/artifacts`).then((res) => setArtifacts(res.data)).catch(() => {});
   }, [runId]);
 
-  // Fetch draft_report.md text content when an artifact with that name is
-  // present. Surfaces inline below the artifacts table for AWF-1 runs.
+  // Prefer the polished FinalReport.md if present; else fall back to the
+  // draft. Renders the chosen artifact's content inline below the artifacts
+  // table. The "final" label tells the user what they're looking at.
   useEffect(() => {
-    const draft = artifacts.find((a) =>
-      a.file_path.endsWith("/draft_report.md") && a.file_exists
+    const final = artifacts.find(
+      (a) => a.file_exists && a.file_path.endsWith("_FinalReport.md")
     );
-    if (!draft) {
-      setDraftReport(null);
+    const draft = artifacts.find(
+      (a) => a.file_exists && a.file_path.endsWith("/draft_report.md")
+    );
+    const chosen = final ?? draft ?? null;
+    if (!chosen) {
+      setReportMd(null);
+      setReportLabel(null);
       return;
     }
+    setReportLabel(final ? "final" : "draft");
     axiosClient
-      .get(`/artifacts/${draft.artifact_id}/download`, { responseType: "text" })
-      .then((res) => setDraftReport(typeof res.data === "string" ? res.data : String(res.data)))
-      .catch(() => setDraftReport(null));
+      .get(`/artifacts/${chosen.artifact_id}/download`, { responseType: "text" })
+      .then((res) => setReportMd(typeof res.data === "string" ? res.data : String(res.data)))
+      .catch(() => setReportMd(null));
   }, [artifacts]);
 
   // Build a chart-name -> download URL map so the markdown renderer can
@@ -245,12 +253,14 @@ export default function RunDetail() {
         </Card>
       )}
 
-      {draftReport !== null && (
+      {reportMd !== null && (
         <Card className="mt-3">
-          <Card.Header>Draft Report</Card.Header>
+          <Card.Header>
+            {reportLabel === "final" ? "Final Report" : "Draft Report"}
+          </Card.Header>
           <Card.Body>
             <MarkdownRender
-              source={draftReport}
+              source={reportMd}
               resolveImage={(src) => chartUrlByName[src]}
             />
           </Card.Body>
