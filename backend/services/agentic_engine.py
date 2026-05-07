@@ -265,13 +265,21 @@ class AgenticEngine:
         marker = await self._enter_stage("ingest")
         try:
             rows = self.workflow.config.get("data_definition") or []
-            rows = [r for r in rows if isinstance(r, dict) and (r.get("file") or "").strip()]
+            # FilePicker stores file as {path, name}; keep tolerant of bare strings.
+            def _file_rel(row: Any) -> str:
+                f = row.get("file") if isinstance(row, dict) else None
+                if isinstance(f, dict):
+                    return (f.get("path") or "").strip()
+                if isinstance(f, str):
+                    return f.strip()
+                return ""
+            rows = [r for r in rows if isinstance(r, dict) and _file_rel(r)]
             if not rows:
                 raise ValueError(
                     "data_definition is empty — at least one table is required to run AWF-1"
                 )
             for i, row in enumerate(rows):
-                rel = row["file"].strip()
+                rel = _file_rel(row)
                 table_name = self._table_name_for_row(i)
                 abs_path = os.path.normpath(os.path.join(self.inputs_dir, rel))
                 if not abs_path.startswith(os.path.normpath(self.inputs_dir) + os.sep) and \
