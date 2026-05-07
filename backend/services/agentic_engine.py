@@ -478,28 +478,43 @@ class AgenticEngine:
         system: str,
         user_prompt: str,
         tool_names: tuple[str, ...],
+        cached_context: str | None = None,
         model: str = DEFAULT_REASONING_MODEL,
         max_tokens: int = 4096,
         max_turns: int = MAX_AGENT_TURNS,
     ) -> tuple[str, int]:
         """Run an LLM-as-agent loop with tool use until the model emits
-        end_turn. Returns (final_assistant_text, total_tokens). Each SDK
-        call writes a kind=llm_turn row; each tool dispatch writes a
-        kind=skill_call row via _call_skill.
+        end_turn. Returns (final_assistant_text, total_tokens).
 
-        Imports the Anthropic client lazily so unit tests / module imports
-        without ANTHROPIC_API_KEY don't fail.
+        Caching: system + cached_context + tools all marked with
+        cache_control={"type": "ephemeral"}. Across N turns of the same
+        loop, the stable prefix is read from cache (cache_read_input_tokens
+        > 0 in the response usage); only the growing tail of tool_results
+        + assistant turns is reprocessed.
+
+        Each SDK call writes a kind=llm_turn row; each tool dispatch
+        writes a kind=skill_call row via _call_skill.
+
+        Imports the Anthropic client lazily so unit tests / module
+        imports without ANTHROPIC_API_KEY don't fail.
         """
         from backend.services.llm_service import get_client  # lazy
         from backend.services.skills import to_anthropic_tools
 
         client = get_client()
         tools = to_anthropic_tools(names=list(tool_names))
-        system_block = [{
-            "type": "text",
-            "text": system,
-            "cache_control": {"type": "ephemeral"},
-        }]
+        # Cache the tool definitions: cache_control on the last tool tells
+        # Anthropic to cache the entire tools array prefix.
+        if tools:
+            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+        system_block = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+        ]
+        if cached_context:
+            system_block.append({
+                "type": "text", "text": cached_context,
+                "cache_control": {"type": "ephemeral"},
+            })
         messages: list[dict] = [{"role": "user", "content": user_prompt}]
         total_tokens = 0
         final_text = ""
@@ -610,16 +625,20 @@ class AgenticEngine:
                 "Keep findings to 3-8 items. Reference tables by their key (t1, t2, ...). "
                 "Do not call a tool you have already called with identical arguments."
             )
-            user_prompt = (
+            # Stable per-run context — moved into the system block so
+            # Anthropic's prompt cache can re-read it across the analyze
+            # loop's many turns instead of re-tokenizing each time.
+            cached_context = (
                 f"## Goal\n{goal}\n\n"
                 f"## Processing steps\n{steps or '(none specified — use your judgment)'}\n\n"
-                f"## Profile summary\n```json\n{json.dumps(self.profile_summary, indent=2, default=str)}\n```\n\n"
-                "Begin analysis. Call tools as needed."
+                f"## Profile summary\n```json\n{json.dumps(self.profile_summary, indent=2, default=str)}\n```"
             )
+            user_prompt = "Begin analysis. Call tools as needed."
 
             text, tokens = await self._run_agent_loop(
                 stage="analyze",
                 system=system,
+                cached_context=cached_context,
                 user_prompt=user_prompt,
                 tool_names=ANALYZE_TOOL_NAMES,
             )
@@ -790,19 +809,23 @@ class AgenticEngine:
                 "Each list 0-6 items. Empty lists are valid if the draft is solid. "
                 "Reference tables by their key (t1, t2, ...)."
             )
-            user_prompt = (
+            # Stable per-run context for caching across audit's loop turns.
+            cached_context = (
                 f"## Goal\n{goal or '(unspecified)'}\n\n"
                 f"## Profile summary (compact)\n```json\n"
                 f"{json.dumps(self.profile_summary, indent=2, default=str)[:6000]}\n"
                 f"```\n\n"
-                f"## Draft report\n{draft_md}\n\n"
-                "Critique the draft now. Use the read-only tools to verify any "
-                "claim you want to challenge before flagging it."
+                f"## Draft report\n{draft_md}"
+            )
+            user_prompt = (
+                "Critique the draft now. Use the read-only tools to verify "
+                "any claim you want to challenge before flagging it."
             )
 
             text, tokens = await self._run_agent_loop(
                 stage="audit",
                 system=system,
+                cached_context=cached_context,
                 user_prompt=user_prompt,
                 tool_names=AUDIT_TOOL_NAMES,
                 max_turns=12,  # tighter than analyze; audit shouldn't sprawl
@@ -990,12 +1013,26 @@ class AgenticEngine:
             .values(total_steps=self._step_counter)
         )
         await self.session.commit()
+        # Cache hit ratio = cache_read / (cache_read + uncached_input).
+        # Uncached input = total_input - cache_read - cache_creation.
+        # The metric expresses "fraction of input tokens served from cache."
+        cache_read = self.total_cache_read_tokens
+        cache_creation = self.total_cache_creation_tokens
+        uncached_input = max(self.total_input_tokens - cache_read - cache_creation, 0)
+        cache_hit_ratio = (
+            cache_read / (cache_read + uncached_input)
+            if (cache_read + uncached_input) > 0
+            else 0.0
+        )
         log.info(
             "agentic_run_complete",
             run_id=self.run.run_id,
             total_steps=self._step_counter,
-            tokens=self.total_tokens_used,
-            cache_read=self.total_cache_read_tokens,
+            input_tokens=self.total_input_tokens,
+            output_tokens=self.total_output_tokens,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
+            cache_hit_ratio=round(cache_hit_ratio, 3),
         )
 
     async def _run_stage_with_timeout(self, stage: str) -> None:
