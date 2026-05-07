@@ -253,6 +253,64 @@ export default function RunDetail() {
         </Card>
       )}
 
+      {(() => {
+        // Charts panel: every PNG artifact, regardless of citation in the
+        // final report. The model frequently produces exploratory charts
+        // it doesn't cite — surfacing them here means the user still sees
+        // them. Cited ones still render inline above via resolveImage.
+        const charts = artifacts.filter((a) => a.file_type === "png" && a.file_exists);
+        if (charts.length === 0) return null;
+        return (
+          <Card className="mt-3">
+            <Card.Header>Charts ({charts.length})</Card.Header>
+            <Card.Body>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                  gap: "0.75rem",
+                }}
+              >
+                {charts.map((c) => {
+                  const filename = c.file_path.split("/").pop() || "";
+                  const url = chartUrlByName[filename];
+                  return (
+                    <a
+                      key={c.artifact_id}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`${filename} — click to view full size`}
+                      style={{
+                        display: "block",
+                        border: "1px solid #dee2e6",
+                        borderRadius: "0.25rem",
+                        overflow: "hidden",
+                        textDecoration: "none",
+                      }}
+                    >
+                      <img
+                        src={url}
+                        alt={c.description || filename}
+                        style={{
+                          width: "100%",
+                          height: "140px",
+                          objectFit: "contain",
+                          background: "#fff",
+                        }}
+                      />
+                      <div className="text-muted small p-1 font-monospace text-truncate">
+                        {filename}
+                      </div>
+                    </a>
+                  );
+                })}
+              </div>
+            </Card.Body>
+          </Card>
+        );
+      })()}
+
       {reportMd !== null && (
         <Card className="mt-3">
           <Card.Header>
