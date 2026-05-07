@@ -55,6 +55,17 @@ ANALYZE_TOOL_NAMES = (
     "create_correlation_heatmap",
 )
 
+# Audit gets the read-only inspection surface: it can re-query tables to
+# check claims but cannot run new chart-rendering or filesystem-writing
+# skills. Charts and write_artifact are intentionally excluded — audit's
+# job is to critique, not to add to the artifact set.
+AUDIT_TOOL_NAMES = (
+    "describe_column",
+    "value_distribution",
+    "correlation_matrix",
+    "groupby_aggregate",
+)
+
 # Cap on agent-loop iterations per stage. Defensive against runaway
 # tool-call loops; A5 will add a real token budget.
 MAX_AGENT_TURNS = 25
@@ -71,9 +82,10 @@ def _truncate_summary(value: Any) -> str:
     return s
 
 
-def _extract_findings_json(text: str) -> dict | None:
-    """Scan an assistant reply for a trailing JSON object containing
-    'findings'. Returns the parsed dict if found, else None."""
+def _extract_trailing_json(text: str) -> dict | None:
+    """Scan an assistant reply for a trailing JSON object. Returns the
+    parsed dict if found, else None. Stages validate the keys they
+    expect ('findings' for analyze, 'weak_claims' etc. for audit)."""
     if not text:
         return None
     # Try the last fenced block first.
@@ -93,9 +105,14 @@ def _extract_findings_json(text: str) -> dict | None:
             obj = json.loads(c)
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and "findings" in obj:
+        if isinstance(obj, dict):
             return obj
     return None
+
+
+# Backwards-compatible alias for any external callers; remove when the
+# only user is the engine itself.
+_extract_findings_json = _extract_trailing_json
 
 
 def _content_blocks_to_dict(content: list[Any]) -> list[dict]:
@@ -149,6 +166,8 @@ class AgenticEngine:
         self.profile_summary: dict[str, Any] = {}
         self.analyze_findings: list[str] = []
         self.draft_report_path: str | None = None
+        self.audit_critique: dict[str, list[str]] = {}
+        self.final_report_path: str | None = None
 
     # ── step helpers ─────────────────────────────────────────────────
 
@@ -515,7 +534,7 @@ class AgenticEngine:
                 tool_names=ANALYZE_TOOL_NAMES,
             )
 
-            findings = _extract_findings_json(text)
+            findings = _extract_trailing_json(text)
             if findings:
                 self.analyze_findings = list(findings.get("findings") or [])
             await self._stage_marker_complete(
@@ -640,9 +659,90 @@ class AgenticEngine:
             raise
 
     async def stage_audit(self) -> None:
-        marker = await self._stage_marker_start("audit")
-        # A4 will replace this with a real LLM critique.
-        await self._stage_marker_complete(marker, summary="(audit no-op — scheduled for A4)")
+        """LLM-as-agent critique pass over the synthesize draft.
+
+        The auditor receives the draft, the analysis goal, the profile
+        summary, and a read-only descriptive_stats tool surface. It can
+        re-query tables to check claims but cannot generate new charts
+        or write files. Output: a structured critique JSON saved as
+        audit_critique.json. Scribe consumes it to drive the polish."""
+        marker = await self._enter_stage("audit")
+        try:
+            cfg = self.workflow.config or {}
+            goal = (cfg.get("analysis_goal") or "").strip()
+            draft_md = ""
+            if self.draft_report_path and os.path.exists(self.draft_report_path):
+                with open(self.draft_report_path, encoding="utf-8") as f:
+                    draft_md = f.read()
+
+            if not draft_md:
+                # Nothing to audit. Mark the stage complete and let scribe
+                # fall through with no critique. Avoids paying for an LLM
+                # call on a missing draft.
+                await self._stage_marker_complete(
+                    marker, summary="(no draft present — audit skipped)"
+                )
+                self.audit_critique = {}
+                return
+
+            system = (
+                "You are a critical reviewer of an analytical report draft. You "
+                "have access to read-only tools to re-query the underlying "
+                "tables when you want to verify a specific claim. You cannot "
+                "render new charts or write files — your job is to critique, "
+                "not to extend the analysis. Be direct and specific. End your "
+                "turn with a JSON object on the last line of the form:\n"
+                '  {"weak_claims": ["<claim with reason it is weak>", ...], '
+                '"overlooked_angles": ["<angle that should have been explored>", ...], '
+                '"suggested_revisions": ["<actionable revision>", ...]}\n'
+                "Each list 0-6 items. Empty lists are valid if the draft is solid. "
+                "Reference tables by their key (t1, t2, ...)."
+            )
+            user_prompt = (
+                f"## Goal\n{goal or '(unspecified)'}\n\n"
+                f"## Profile summary (compact)\n```json\n"
+                f"{json.dumps(self.profile_summary, indent=2, default=str)[:6000]}\n"
+                f"```\n\n"
+                f"## Draft report\n{draft_md}\n\n"
+                "Critique the draft now. Use the read-only tools to verify any "
+                "claim you want to challenge before flagging it."
+            )
+
+            text, tokens = await self._run_agent_loop(
+                stage="audit",
+                system=system,
+                user_prompt=user_prompt,
+                tool_names=AUDIT_TOOL_NAMES,
+                max_turns=12,  # tighter than analyze; audit shouldn't sprawl
+            )
+
+            critique = _extract_trailing_json(text) or {}
+            # Normalize: keep only the three documented keys, with list values.
+            self.audit_critique = {
+                k: list(critique.get(k) or [])
+                for k in ("weak_claims", "overlooked_angles", "suggested_revisions")
+            }
+
+            # Persist the critique as a downloadable artifact.
+            await self._call_skill(
+                "write_artifact",
+                name="audit_critique.json",
+                content=self.audit_critique,
+                kind="json",
+            )
+
+            await self._stage_marker_complete(
+                marker,
+                summary=_truncate_summary({
+                    "tokens_used": tokens,
+                    "weak_claims": len(self.audit_critique["weak_claims"]),
+                    "overlooked_angles": len(self.audit_critique["overlooked_angles"]),
+                    "suggested_revisions": len(self.audit_critique["suggested_revisions"]),
+                }),
+            )
+        except Exception as e:
+            await self._stage_marker_fail(marker, f"audit failed: {e}")
+            raise
 
     async def stage_scribe(self) -> None:
         marker = await self._stage_marker_start("scribe")
