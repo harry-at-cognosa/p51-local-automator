@@ -127,6 +127,10 @@ class WorkflowTypes(Base):
     # the schema shape.
     config_schema: Mapped[list | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
+    # Whether instances of this type can be scheduled. AWF-1 (Analyze Data
+    # Collection) is false: a single run is too expensive/slow to dispatch
+    # from cron. Frontend hides schedule UI when this is false.
+    schedulable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
 
     category: Mapped["WorkflowCategories"] = relationship("WorkflowCategories", back_populates="workflow_types")
     user_workflows: Mapped[list["UserWorkflows"]] = relationship("UserWorkflows", back_populates="workflow_type")

@@ -137,6 +137,7 @@ class WorkflowTypeRead(BaseModel):
     required_services: list | dict
     config_schema: list | None = None
     enabled: bool
+    schedulable: bool
 
     class Config:
         from_attributes = True
