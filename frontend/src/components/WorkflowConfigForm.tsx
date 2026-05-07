@@ -153,6 +153,7 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
 
   // SQL Query Runner
   if (typeId === 4) {
+    const hasStoredSecret = Boolean(config.connection_string_enc);
     return (
       <Row className="g-3">
         <Col md={6}>
@@ -169,10 +170,21 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
           <Form.Group>
             <Form.Label>Connection String</Form.Label>
             <Form.Control
-              placeholder="postgresql://user:pass@localhost:5432/dbname"
+              placeholder={
+                hasStoredSecret
+                  ? "(stored — leave blank to keep, or type to replace)"
+                  : "postgresql://user:pass@localhost:5432/dbname"
+              }
               value={(config.connection_string as string) || ""}
               onChange={(e) => set("connection_string", e.target.value)}
             />
+            {hasStoredSecret && (
+              <Form.Text className="text-muted">
+                Connection string is stored encrypted. The original value is not
+                displayed. Leave the field blank to keep it; type a new string
+                to replace it.
+              </Form.Text>
+            )}
           </Form.Group>
         </Col>
         <Col md={12}>
