@@ -143,14 +143,23 @@ async def start_step(
     run_id: int,
     step_number: int,
     step_name: str,
+    stage: str | None = None,
+    kind: str | None = None,
 ) -> WorkflowSteps:
-    """Create a step record and mark it as running."""
+    """Create a step record and mark it as running.
+
+    `stage` and `kind` are the AWF-1 agentic annotations (NULL for
+    types 1-6). Stage ∈ {ingest, profile, analyze, synthesize, audit,
+    scribe}. Kind ∈ {skill_call, llm_turn, stage_marker}.
+    """
     step = WorkflowSteps(
         run_id=run_id,
         step_number=step_number,
         step_name=step_name,
         status="running",
         started_at=datetime.now(timezone.utc),
+        stage=stage,
+        kind=kind,
     )
     session.add(step)
     await session.flush()
