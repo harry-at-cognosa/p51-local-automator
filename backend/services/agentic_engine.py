@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,6 +71,31 @@ AUDIT_TOOL_NAMES = (
 # Cap on agent-loop iterations per stage. Defensive against runaway
 # tool-call loops; A5 will add a real token budget.
 MAX_AGENT_TURNS = 25
+
+
+_SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _sanitize_slug(s: str, max_len: int = 60) -> str:
+    """Lowercase, replace non-alnum/dash/underscore runs with `_`,
+    collapse repeats, trim to max_len. Returns 'report' if empty."""
+    s = (s or "").strip().lower()
+    s = _SLUG_RE.sub("_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    if not s:
+        return "report"
+    return s[:max_len]
+
+
+def _final_report_filename(workflow_name: str, slug_override: str | None = None) -> str:
+    """`<slug>_<YYMMDD>_FinalReport.md`. Slug priority:
+    user-supplied report_filename slug, else sanitized workflow_name."""
+    if slug_override and slug_override.strip():
+        slug = _sanitize_slug(slug_override)
+    else:
+        slug = _sanitize_slug(workflow_name)
+    yymmdd = datetime.now().strftime("%y%m%d")
+    return f"{slug}_{yymmdd}_FinalReport.md"
 
 
 def _truncate_summary(value: Any) -> str:
@@ -745,9 +772,109 @@ class AgenticEngine:
             raise
 
     async def stage_scribe(self) -> None:
-        marker = await self._stage_marker_start("scribe")
-        # A4 will replace this with the final polish pass.
-        await self._stage_marker_complete(marker, summary="(scribe no-op — scheduled for A4)")
+        """Single LLM call (no tools) producing the polished final report.
+
+        Receives the audited draft, the audit critique (weak_claims,
+        overlooked_angles, suggested_revisions), and the user-supplied
+        voice_and_style profile. Output filename per the polished-rule:
+        `<slug>_<YYMMDD>_FinalReport.md`. Slug = config.report_filename
+        if set, else the sanitized workflow name."""
+        marker = await self._enter_stage("scribe")
+        try:
+            from backend.services.llm_service import get_client  # lazy
+
+            cfg = self.workflow.config or {}
+            voice_and_style = (cfg.get("voice_and_style") or "").strip()
+            slug_override = (cfg.get("report_filename") or "").strip() or None
+
+            draft_md = ""
+            if self.draft_report_path and os.path.exists(self.draft_report_path):
+                with open(self.draft_report_path, encoding="utf-8") as f:
+                    draft_md = f.read()
+
+            if not draft_md:
+                # Nothing to polish. Mark skipped without paying for an LLM call.
+                await self._stage_marker_complete(
+                    marker, summary="(no draft present — scribe skipped)"
+                )
+                return
+
+            critique_block = json.dumps(self.audit_critique, indent=2) if self.audit_critique else "(no critique)"
+
+            system = (
+                "You are a careful technical writer producing a final, polished "
+                "report. You will be given an analyst's draft, a structured "
+                "critique of that draft, and a voice/style profile. Apply the "
+                "suggested revisions, address the weak claims, and incorporate "
+                "the overlooked angles where appropriate. Match the voice and "
+                "style profile. Preserve any markdown image references "
+                "(![alt](file.png)) the draft included — they point at chart "
+                "artifacts the user wants to see in the final report. Output "
+                "ONLY the markdown report — no preamble, no fences, no sign-off."
+            )
+            user_prompt = (
+                f"## Voice and style\n"
+                f"{voice_and_style or '(no profile specified — write in a clear, neutral, exec-summary tone)'}\n\n"
+                f"## Critique to address\n```json\n{critique_block}\n```\n\n"
+                f"## Draft to polish\n{draft_md}\n\n"
+                "Produce the final polished markdown report now."
+            )
+
+            client = get_client()
+            response = client.messages.create(
+                model=DEFAULT_REASONING_MODEL,
+                max_tokens=4096,
+                system=[{
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "cache_creation_input_tokens": getattr(
+                    response.usage, "cache_creation_input_tokens", 0
+                ),
+                "cache_read_input_tokens": getattr(
+                    response.usage, "cache_read_input_tokens", 0
+                ),
+            }
+            text_blocks = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+            polished = "\n\n".join(text_blocks).strip()
+            if polished.startswith("```"):
+                lines = polished.split("\n")
+                polished = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+            await self._record_llm_turn(
+                stage="scribe",
+                purpose="final polish",
+                usage=usage,
+                stop_reason=response.stop_reason,
+                text_preview=polished[:500],
+            )
+
+            filename = _final_report_filename(self.workflow.name, slug_override)
+            artifact = await self._call_skill(
+                "write_artifact",
+                name=filename,
+                content=polished,
+                kind="md",
+            )
+            self.final_report_path = artifact["path"] if artifact else None
+
+            await self._stage_marker_complete(
+                marker,
+                summary=_truncate_summary({
+                    "final_path": self.final_report_path,
+                    "tokens": int(usage["input_tokens"]) + int(usage["output_tokens"]),
+                    "char_count": len(polished),
+                }),
+            )
+        except Exception as e:
+            await self._stage_marker_fail(marker, f"scribe failed: {e}")
+            raise
 
     # ── public driver ────────────────────────────────────────────────
 
