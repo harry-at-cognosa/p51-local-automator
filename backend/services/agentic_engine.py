@@ -38,6 +38,27 @@ log = get_logger("agentic_engine")
 
 _SUMMARY_MAX_CHARS = 2000
 
+# Anthropic model defaults. Opus for reasoning-heavy stages.
+DEFAULT_REASONING_MODEL = "claude-opus-4-7"
+
+# Stage-tool mapping. analyze gets the read-write computation surface;
+# audit (A4) will get the read-only inspection surface; data_io is never
+# exposed to the LLM (loaders run deterministically in ingest).
+ANALYZE_TOOL_NAMES = (
+    "describe_column",
+    "value_distribution",
+    "correlation_matrix",
+    "groupby_aggregate",
+    "create_scatter_plot",
+    "create_histogram",
+    "create_bar_chart",
+    "create_correlation_heatmap",
+)
+
+# Cap on agent-loop iterations per stage. Defensive against runaway
+# tool-call loops; A5 will add a real token budget.
+MAX_AGENT_TURNS = 25
+
 
 def _truncate_summary(value: Any) -> str:
     """Compact JSON serialization for output_summary, capped at _SUMMARY_MAX_CHARS."""
@@ -48,6 +69,47 @@ def _truncate_summary(value: Any) -> str:
     if len(s) > _SUMMARY_MAX_CHARS:
         return s[: _SUMMARY_MAX_CHARS - 16] + "...[truncated]"
     return s
+
+
+def _extract_findings_json(text: str) -> dict | None:
+    """Scan an assistant reply for a trailing JSON object containing
+    'findings'. Returns the parsed dict if found, else None."""
+    if not text:
+        return None
+    # Try the last fenced block first.
+    fenced = text.rsplit("```", 2)
+    candidates = []
+    if len(fenced) >= 3:
+        body = fenced[-2]
+        if body.lower().startswith("json\n"):
+            body = body[5:]
+        candidates.append(body.strip())
+    # Then the last { ... } substring.
+    last_open = text.rfind("{")
+    if last_open != -1:
+        candidates.append(text[last_open:].strip())
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "findings" in obj:
+            return obj
+    return None
+
+
+def _content_blocks_to_dict(content: list[Any]) -> list[dict]:
+    """Convert SDK Message.content blocks (mixed objects) to plain dicts so
+    they can be appended to the messages list for the next request."""
+    out: list[dict] = []
+    for block in content:
+        # Each block exposes a model_dump() in the SDK; fall back to attrs.
+        if hasattr(block, "model_dump"):
+            out.append(block.model_dump())
+        else:
+            out.append({k: getattr(block, k) for k in ("type", "text", "id", "name", "input")
+                        if hasattr(block, k)})
+    return out
 
 
 STAGES = ("ingest", "profile", "analyze", "synthesize", "audit", "scribe")
@@ -237,11 +299,201 @@ class AgenticEngine:
             await self._stage_marker_fail(marker, f"profile failed: {e}")
             raise
 
+    # ── LLM-as-agent loop ────────────────────────────────────────────
+
+    async def _record_llm_turn(
+        self,
+        *,
+        stage: str,
+        purpose: str,
+        usage: dict,
+        stop_reason: str | None,
+        text_preview: str = "",
+    ) -> WorkflowSteps:
+        """Write a kind=llm_turn workflow_steps row capturing one SDK call.
+        Returns the completed step (already finalized)."""
+        step = await self._start(
+            step_name=f"llm: {purpose}",
+            stage=stage,
+            kind="llm_turn",
+        )
+        total_tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+        summary_obj = {
+            "stop_reason": stop_reason,
+            "usage": usage,
+        }
+        if text_preview:
+            summary_obj["text_preview"] = text_preview[:500]
+        await engine.complete_step(
+            self.session,
+            step,
+            output_summary=_truncate_summary(summary_obj),
+            llm_tokens=total_tokens,
+        )
+        return step
+
+    async def _run_agent_loop(
+        self,
+        *,
+        stage: str,
+        system: str,
+        user_prompt: str,
+        tool_names: tuple[str, ...],
+        model: str = DEFAULT_REASONING_MODEL,
+        max_tokens: int = 4096,
+        max_turns: int = MAX_AGENT_TURNS,
+    ) -> tuple[str, int]:
+        """Run an LLM-as-agent loop with tool use until the model emits
+        end_turn. Returns (final_assistant_text, total_tokens). Each SDK
+        call writes a kind=llm_turn row; each tool dispatch writes a
+        kind=skill_call row via _call_skill.
+
+        Imports the Anthropic client lazily so unit tests / module imports
+        without ANTHROPIC_API_KEY don't fail.
+        """
+        from backend.services.llm_service import get_client  # lazy
+        from backend.services.skills import to_anthropic_tools
+
+        client = get_client()
+        tools = to_anthropic_tools(names=list(tool_names))
+        system_block = [{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }]
+        messages: list[dict] = [{"role": "user", "content": user_prompt}]
+        total_tokens = 0
+        final_text = ""
+
+        for turn in range(1, max_turns + 1):
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_block,
+                tools=tools,
+                messages=messages,
+            )
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "cache_creation_input_tokens": getattr(
+                    response.usage, "cache_creation_input_tokens", 0
+                ),
+                "cache_read_input_tokens": getattr(
+                    response.usage, "cache_read_input_tokens", 0
+                ),
+            }
+            text_blocks = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+            preview = "\n".join(text_blocks)[:500] if text_blocks else ""
+            await self._record_llm_turn(
+                stage=stage,
+                purpose=f"{stage} turn {turn}",
+                usage=usage,
+                stop_reason=response.stop_reason,
+                text_preview=preview,
+            )
+            total_tokens += int(usage["input_tokens"]) + int(usage["output_tokens"])
+
+            if response.stop_reason == "end_turn":
+                final_text = "\n\n".join(text_blocks)
+                break
+
+            if response.stop_reason == "tool_use":
+                # Append the assistant turn so the next request can resolve
+                # tool_use_id references in the tool_result blocks.
+                messages.append({
+                    "role": "assistant",
+                    "content": _content_blocks_to_dict(response.content),
+                })
+                tool_results: list[dict] = []
+                for block in response.content:
+                    if getattr(block, "type", None) != "tool_use":
+                        continue
+                    skill_name = block.name
+                    tool_input = block.input or {}
+                    try:
+                        result = await self._call_skill(skill_name, **tool_input)
+                        is_error = False
+                        content_str = json.dumps(result, default=str)
+                    except Exception as e:  # noqa: BLE001
+                        result = None
+                        is_error = True
+                        content_str = f"{type(e).__name__}: {e}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": content_str,
+                        "is_error": is_error,
+                    })
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
+            # Any other stop_reason (max_tokens, stop_sequence, etc.) —
+            # fold what we have and exit the loop.
+            final_text = "\n\n".join(text_blocks)
+            log.info(
+                "agent_loop_unexpected_stop",
+                stage=stage,
+                stop_reason=response.stop_reason,
+                turn=turn,
+            )
+            break
+        else:
+            # Hit max_turns without an end_turn signal.
+            log.info("agent_loop_max_turns", stage=stage, max_turns=max_turns)
+
+        return final_text, total_tokens
+
     async def stage_analyze(self) -> None:
-        marker = await self._stage_marker_start("analyze")
+        """LLM-as-agent loop. The analyst is given the goal, processing
+        steps, profile summary, and a curated tool set; it iterates until
+        it stops calling tools."""
+        marker = await self._enter_stage("analyze")
         try:
-            # A3.3: LLM-as-agent loop with descriptive_stats + charts tools
-            await self._stage_marker_complete(marker, summary="(analyze stub — A3.3)")
+            cfg = self.workflow.config or {}
+            goal = (cfg.get("analysis_goal") or "").strip()
+            steps = (cfg.get("processing_steps") or "").strip()
+            if not goal:
+                raise ValueError("analysis_goal is required")
+
+            system = (
+                "You are a careful data analyst. You have been given one or more "
+                "tables loaded into the workflow's tables dict, a stated goal, and "
+                "a set of analysis tools (descriptive statistics + chart rendering). "
+                "Use the tools to gather evidence relevant to the goal. Render "
+                "charts when they materially aid the analysis. When you have "
+                "enough evidence, end your turn with a short JSON object on the "
+                "last line of the form:\n"
+                '  {"findings": ["<one-sentence finding>", ...], '
+                '"artifacts_produced": ["<chart filename>", ...]}\n'
+                "Keep findings to 3-8 items. Reference tables by their key (t1, t2, ...). "
+                "Do not call a tool you have already called with identical arguments."
+            )
+            user_prompt = (
+                f"## Goal\n{goal}\n\n"
+                f"## Processing steps\n{steps or '(none specified — use your judgment)'}\n\n"
+                f"## Profile summary\n```json\n{json.dumps(self.profile_summary, indent=2, default=str)}\n```\n\n"
+                "Begin analysis. Call tools as needed."
+            )
+
+            text, tokens = await self._run_agent_loop(
+                stage="analyze",
+                system=system,
+                user_prompt=user_prompt,
+                tool_names=ANALYZE_TOOL_NAMES,
+            )
+
+            findings = _extract_findings_json(text)
+            if findings:
+                self.analyze_findings = list(findings.get("findings") or [])
+            await self._stage_marker_complete(
+                marker,
+                summary=_truncate_summary({
+                    "tokens_used": tokens,
+                    "n_findings": len(self.analyze_findings),
+                    "raw_tail": text[-500:],
+                }),
+            )
         except Exception as e:
             await self._stage_marker_fail(marker, f"analyze failed: {e}")
             raise
