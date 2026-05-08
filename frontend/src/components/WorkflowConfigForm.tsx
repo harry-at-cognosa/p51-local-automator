@@ -205,108 +205,11 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
     );
   }
 
-  // Auto-Reply (Draft Only) = type 5, Auto-Reply (Approve Before Send) = type 6
-  // Same config shape for both.
+  // Auto-Reply (Draft Only) = type 5, Auto-Reply (Approve Before Send) = type 6.
+  // Same config shape for both; subcomponent owns hooks for the gmail
+  // account picker (Track B Phase B2).
   if (typeId === 5 || typeId === 6) {
-    return (
-      <Row className="g-3">
-        <Col md={6}>
-          <Form.Group>
-            <Form.Label>Mail Account</Form.Label>
-            <Form.Select
-              value={(config.account as string) || "iCloud"}
-              onChange={(e) => set("account", e.target.value)}
-            >
-              {MAIL_ACCOUNTS.map((a) => (
-                <option key={a.value} value={a.value}>{a.label}</option>
-              ))}
-            </Form.Select>
-            <Form.Text className="text-muted">Drafts/sends use this account</Form.Text>
-          </Form.Group>
-        </Col>
-        <Col md={6}>
-          <Form.Group>
-            <Form.Label>Mailbox</Form.Label>
-            <Form.Control
-              value={(config.mailbox as string) || "INBOX"}
-              onChange={(e) => set("mailbox", e.target.value)}
-            />
-          </Form.Group>
-        </Col>
-        <Col md={6}>
-          <Form.Group>
-            <Form.Label>Sender filter (substring, case-insensitive)</Form.Label>
-            <Form.Control
-              placeholder="e.g. form-submission@squarespace.info"
-              value={(config.sender_filter as string) || ""}
-              onChange={(e) => set("sender_filter", e.target.value)}
-            />
-          </Form.Group>
-        </Col>
-        <Col md={6}>
-          <Form.Group>
-            <Form.Label>Fetch limit</Form.Label>
-            <Form.Control
-              type="number"
-              min={1}
-              max={200}
-              value={(config.fetch_limit as number) || 50}
-              onChange={(e) => set("fetch_limit", parseInt(e.target.value, 10) || 50)}
-            />
-            <Form.Text className="text-muted">Max recent messages to scan per run</Form.Text>
-          </Form.Group>
-        </Col>
-        <Col md={12}>
-          <Form.Group>
-            <Form.Label>Body contains (substring, case-insensitive)</Form.Label>
-            <Form.Control
-              placeholder="e.g. Sent via form submission from CogWrite Semantic Technologies"
-              value={(config.body_contains as string) || ""}
-              onChange={(e) => set("body_contains", e.target.value)}
-            />
-            <Form.Text className="text-muted">
-              At least one filter (sender or body) is required — empty-filter runs are skipped to avoid unintended replies.
-            </Form.Text>
-          </Form.Group>
-        </Col>
-        <Col md={12}>
-          <Form.Group>
-            <Form.Label>Submitter-email body label (optional)</Form.Label>
-            <Form.Control
-              placeholder="e.g. Email:"
-              value={(config.body_email_field as string) || ""}
-              onChange={(e) => set("body_email_field", e.target.value)}
-            />
-            <Form.Text className="text-muted">
-              For form-submission emails where the sender is a no-reply transport (e.g. <code>form-submission@squarespace.info</code>), specify the body label that precedes the actual submitter's email. Squarespace puts <code>Email:&nbsp;harry@example.com</code> in the body. The engine will use that address as the reply target. Leave blank for emails with a real Reply-To header.
-            </Form.Text>
-          </Form.Group>
-        </Col>
-        <Col md={12}>
-          <Form.Group>
-            <Form.Label>Reply tone</Form.Label>
-            <Form.Control
-              placeholder="e.g. warm and professional"
-              value={(config.tone as string) || "warm and professional"}
-              onChange={(e) => set("tone", e.target.value)}
-            />
-          </Form.Group>
-        </Col>
-        <Col md={12}>
-          <Form.Group>
-            <Form.Label>Signature (appended to every reply)</Form.Label>
-            <Form.Control
-              as="textarea"
-              rows={3}
-              placeholder={"Harry Layman\nCognosa"}
-              value={(config.signature as string) || ""}
-              onChange={(e) => set("signature", e.target.value)}
-              style={{ fontFamily: "monospace", fontSize: "0.9em" }}
-            />
-          </Form.Group>
-        </Col>
-      </Row>
-    );
+    return <Type56AutoReplyForm config={config} onChange={onChange} set={set} />;
   }
 
   // Schema-driven path for new workflow types whose typeId has no
@@ -504,5 +407,190 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
         </div>
       )}
     </>
+  );
+}
+
+
+// ── Types 5/6 Auto-Reply form — apple_mail or gmail (Track B Phase B2) ──
+
+interface Type56Props {
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+  set: (key: string, value: unknown) => void;
+}
+
+function Type56AutoReplyForm({ config, onChange, set }: Type56Props) {
+  const service = (config.service as string) || "apple_mail";
+
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [gmailError, setGmailError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (service !== "gmail") return;
+    setGmailLoading(true);
+    setGmailError(null);
+    axiosClient
+      .get<GmailAccountOption[]>("/gmail/accounts")
+      .then((res) => setGmailAccounts(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setGmailError(err?.response?.data?.detail || err?.message || "Failed to load Gmail accounts.");
+      })
+      .finally(() => setGmailLoading(false));
+  }, [service]);
+
+  const handleServiceChange = (newService: string) => {
+    const next: Record<string, unknown> = { ...config, service: newService };
+    delete next.account;
+    delete next.account_id;
+    onChange(next);
+  };
+
+  const activeGmailAccounts = gmailAccounts.filter((a) => a.status === "active");
+
+  return (
+    <Row className="g-3">
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Email Service</Form.Label>
+          <Form.Select
+            value={service}
+            onChange={(e) => handleServiceChange(e.target.value)}
+          >
+            <option value="apple_mail">Apple Mail</option>
+            <option value="gmail">Gmail (Workspace)</option>
+          </Form.Select>
+          <Form.Text className="text-muted">
+            {service === "gmail"
+              ? "Drafts and sends use the connected Gmail account below."
+              : "Drafts and sends use this Apple Mail account."}
+          </Form.Text>
+        </Form.Group>
+      </Col>
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>{service === "gmail" ? "Gmail Account" : "Mail Account"}</Form.Label>
+          {service === "gmail" ? (
+            <>
+              <Form.Select
+                value={(config.account_id as number | undefined) ?? ""}
+                onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
+                disabled={gmailLoading || activeGmailAccounts.length === 0}
+              >
+                <option value="">— select an account —</option>
+                {activeGmailAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.email}</option>
+                ))}
+              </Form.Select>
+              {gmailLoading && (
+                <Form.Text className="text-muted">Loading Gmail accounts…</Form.Text>
+              )}
+              {gmailError && (
+                <Form.Text className="text-danger">{gmailError}</Form.Text>
+              )}
+              {!gmailLoading && !gmailError && activeGmailAccounts.length === 0 && (
+                <Form.Text className="text-muted">
+                  No active Gmail accounts. Connect one at <code>/app/connections</code>.
+                </Form.Text>
+              )}
+            </>
+          ) : (
+            <Form.Select
+              value={(config.account as string) || "iCloud"}
+              onChange={(e) => set("account", e.target.value)}
+            >
+              {MAIL_ACCOUNTS.map((a) => (
+                <option key={a.value} value={a.value}>{a.label}</option>
+              ))}
+            </Form.Select>
+          )}
+        </Form.Group>
+      </Col>
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Mailbox</Form.Label>
+          <Form.Control
+            value={(config.mailbox as string) || "INBOX"}
+            onChange={(e) => set("mailbox", e.target.value)}
+          />
+          <Form.Text className="text-muted">
+            {service === "gmail" ? "Gmail label (INBOX, or any custom label)." : "Apple Mail mailbox."}
+          </Form.Text>
+        </Form.Group>
+      </Col>
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Fetch limit</Form.Label>
+          <Form.Control
+            type="number"
+            min={1}
+            max={200}
+            value={(config.fetch_limit as number) || 50}
+            onChange={(e) => set("fetch_limit", parseInt(e.target.value, 10) || 50)}
+          />
+          <Form.Text className="text-muted">Max recent messages to scan per run</Form.Text>
+        </Form.Group>
+      </Col>
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Sender filter (substring, case-insensitive)</Form.Label>
+          <Form.Control
+            placeholder="e.g. form-submission@squarespace.info"
+            value={(config.sender_filter as string) || ""}
+            onChange={(e) => set("sender_filter", e.target.value)}
+          />
+        </Form.Group>
+      </Col>
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Body contains (substring, case-insensitive)</Form.Label>
+          <Form.Control
+            placeholder="e.g. Sent via form submission from CogWrite Semantic Technologies"
+            value={(config.body_contains as string) || ""}
+            onChange={(e) => set("body_contains", e.target.value)}
+          />
+          <Form.Text className="text-muted">
+            At least one filter (sender or body) is required — empty-filter runs are skipped to avoid unintended replies.
+          </Form.Text>
+        </Form.Group>
+      </Col>
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Submitter-email body label (optional)</Form.Label>
+          <Form.Control
+            placeholder="e.g. Email:"
+            value={(config.body_email_field as string) || ""}
+            onChange={(e) => set("body_email_field", e.target.value)}
+          />
+          <Form.Text className="text-muted">
+            For form-submission emails where the sender is a no-reply transport (e.g. <code>form-submission@squarespace.info</code>), specify the body label that precedes the actual submitter's email. Leave blank for emails with a real Reply-To header.
+          </Form.Text>
+        </Form.Group>
+      </Col>
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Reply tone</Form.Label>
+          <Form.Control
+            placeholder="e.g. warm and professional"
+            value={(config.tone as string) || "warm and professional"}
+            onChange={(e) => set("tone", e.target.value)}
+          />
+        </Form.Group>
+      </Col>
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Signature (appended to every reply)</Form.Label>
+          <Form.Control
+            as="textarea"
+            rows={3}
+            placeholder={"Harry Layman\nCognosa"}
+            value={(config.signature as string) || ""}
+            onChange={(e) => set("signature", e.target.value)}
+            style={{ fontFamily: "monospace", fontSize: "0.9em" }}
+          />
+        </Form.Group>
+      </Col>
+    </Row>
   );
 }
