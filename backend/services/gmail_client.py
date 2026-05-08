@@ -317,6 +317,109 @@ async def gmail_get_message(
     return out
 
 
+def _build_mime_message(*, to: str, subject: str, body: str, in_reply_to: str | None = None) -> str:
+    """Construct a single-part text/plain RFC 822 message and return its
+    base64url-encoded raw form, ready for Gmail's drafts.create / messages.send.
+
+    `in_reply_to` is the source message's RFC 822 Message-ID header value
+    (with brackets, e.g. `<abc@mail.gmail.com>`); when supplied it's also
+    written to References so Gmail threads the reply with the original."""
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["To"] = to
+    msg["Subject"] = subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = in_reply_to
+    msg.set_content(body)
+    raw_bytes = msg.as_bytes()
+    return base64.urlsafe_b64encode(raw_bytes).decode("ascii")
+
+
+async def gmail_save_draft(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    in_reply_to: str | None = None,
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+) -> dict[str, str]:
+    """Create a Gmail draft. Returns {'id', 'message_id', 'thread_id'}.
+
+    Requires the gmail.compose scope (added in B2.1)."""
+    account = await _load_active_account(session, account_id)
+    creds = await _ensure_fresh_credentials(session, account)
+    raw = _build_mime_message(to=to, subject=subject, body=body, in_reply_to=in_reply_to)
+
+    def _create():
+        service = _build_service(creds)
+        return service.users().drafts().create(
+            userId="me",
+            body={"message": {"raw": raw}},
+        ).execute()
+
+    try:
+        result = await asyncio.to_thread(_create)
+    except Exception as e:
+        await _log_event(session, account_id, "save_draft", workflow_id, run_id, str(e)[:500])
+        raise
+
+    account.last_used_at = datetime.now(timezone.utc)
+    await _log_event(session, account_id, "save_draft", workflow_id, run_id)
+    await session.flush()
+    inner = result.get("message") or {}
+    return {
+        "id": result.get("id", ""),
+        "message_id": inner.get("id", ""),
+        "thread_id": inner.get("threadId", ""),
+    }
+
+
+async def gmail_send_message(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    in_reply_to: str | None = None,
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+) -> dict[str, str]:
+    """Send a Gmail message via users.messages.send. Returns
+    {'message_id', 'thread_id'}.
+
+    Requires the gmail.send scope (added in B2.1)."""
+    account = await _load_active_account(session, account_id)
+    creds = await _ensure_fresh_credentials(session, account)
+    raw = _build_mime_message(to=to, subject=subject, body=body, in_reply_to=in_reply_to)
+
+    def _send():
+        service = _build_service(creds)
+        return service.users().messages().send(
+            userId="me",
+            body={"raw": raw},
+        ).execute()
+
+    try:
+        result = await asyncio.to_thread(_send)
+    except Exception as e:
+        await _log_event(session, account_id, "send_message", workflow_id, run_id, str(e)[:500])
+        raise
+
+    account.last_used_at = datetime.now(timezone.utc)
+    await _log_event(session, account_id, "send_message", workflow_id, run_id)
+    await session.flush()
+    return {
+        "message_id": result.get("id", ""),
+        "thread_id": result.get("threadId", ""),
+    }
+
+
 async def gmail_search(
     session: AsyncSession,
     account_id: int,
