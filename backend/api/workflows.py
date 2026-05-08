@@ -35,7 +35,7 @@ from backend.db.schemas import (
     WorkflowArtifactRead,
 )
 from backend.auth.users import current_active_user
-from backend.services import mcp_client
+from backend.services import gmail_client, mcp_client
 from backend.services import secrets as crypto
 from backend.services.logger_service import get_logger
 from backend.services.workflows.calendar_digest import run_calendar_digest
@@ -714,6 +714,27 @@ def _resolve(pending: PendingEmailReplies, status: str, action: str, final_body:
     pending.resolved_at = datetime.now(timezone.utc)
 
 
+async def _service_and_gmail_id_for_pending(
+    session: AsyncSession, pending: PendingEmailReplies
+) -> tuple[str, int | None]:
+    """Resolve (service, gmail_account_id) for a pending reply.
+
+    The pending row doesn't carry service info — we look it up from the
+    parent workflow's current config. Edge case: if the user changes
+    service between queue-time and approve-time, the dispatch uses the
+    current config. Acceptable for v1 since changing service while a
+    queue is pending is rare and the error path is recoverable.
+    """
+    workflow = await session.get(UserWorkflows, pending.workflow_id)
+    if not workflow:
+        # Defensive — referential integrity should prevent this.
+        return ("apple_mail", None)
+    cfg = workflow.config or {}
+    service = (cfg.get("service") or "apple_mail").lower()
+    account_id = cfg.get("account_id") if service == "gmail" else None
+    return (service, account_id if isinstance(account_id, int) else None)
+
+
 @router_workflows.post("/pending-replies/{pending_id}/approve")
 async def approve_pending_reply(
     pending_id: int,
@@ -727,13 +748,29 @@ async def approve_pending_reply(
         raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
 
     outgoing_body = (body.final_body or pending.body_draft)
+    service, gmail_account_id = await _service_and_gmail_id_for_pending(session, pending)
     try:
-        await mcp_client.mail_send_email(
-            to=pending.to_address,
-            subject=pending.subject,
-            body=outgoing_body,
-            from_account=pending.source_account,
-        )
+        if service == "gmail":
+            if gmail_account_id is None:
+                raise RuntimeError(
+                    "workflow.config.account_id is missing — cannot send via Gmail"
+                )
+            await gmail_client.gmail_send_message(
+                session,
+                account_id=gmail_account_id,
+                to=pending.to_address,
+                subject=pending.subject,
+                body=outgoing_body,
+                workflow_id=pending.workflow_id,
+                run_id=pending.run_id,
+            )
+        else:
+            await mcp_client.mail_send_email(
+                to=pending.to_address,
+                subject=pending.subject,
+                body=outgoing_body,
+                from_account=pending.source_account,
+            )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Mail send failed: {str(e)[:200]}")
 
@@ -757,13 +794,29 @@ async def save_pending_reply_as_draft(
         raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
 
     outgoing_body = (body.final_body or pending.body_draft)
+    service, gmail_account_id = await _service_and_gmail_id_for_pending(session, pending)
     try:
-        await mcp_client.mail_save_draft(
-            to=pending.to_address,
-            subject=pending.subject,
-            body=outgoing_body,
-            from_account=pending.source_account,
-        )
+        if service == "gmail":
+            if gmail_account_id is None:
+                raise RuntimeError(
+                    "workflow.config.account_id is missing — cannot save draft via Gmail"
+                )
+            await gmail_client.gmail_save_draft(
+                session,
+                account_id=gmail_account_id,
+                to=pending.to_address,
+                subject=pending.subject,
+                body=outgoing_body,
+                workflow_id=pending.workflow_id,
+                run_id=pending.run_id,
+            )
+        else:
+            await mcp_client.mail_save_draft(
+                to=pending.to_address,
+                subject=pending.subject,
+                body=outgoing_body,
+                from_account=pending.source_account,
+            )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Draft save failed: {str(e)[:200]}")
 
