@@ -1,14 +1,20 @@
 """Calendar Digest Workflow
 
 Steps:
-1. Fetch events from Apple Calendar via MCP
+1. Fetch events from the configured calendar service
 2. Analyze with LLM (conflicts, importance, prep notes)
 3. Generate summary report (JSON + optional Excel)
 
 Config (from user_workflows.config):
-    calendars: list[str] - Calendar names (default ["Work", "Family"])
+    service: str - "apple_calendar" (default) | "google_calendar"
     days: int - Number of days to look ahead (default 7)
-    service: str - "apple_calendar" (default)
+
+  apple_calendar:
+    calendars: list[str] - Calendar names (default ["Work", "Family"])
+
+  google_calendar:
+    account_id: int - GmailAccounts.id of the connected Google account
+    calendar_ids: list[str] - Calendar IDs (from /google-calendar/calendars)
 """
 import json
 import os
@@ -16,8 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.services import mcp_client
-from backend.services import llm_service
+from backend.services import google_calendar_client, llm_service, mcp_client
 from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
 from backend.db.models import UserWorkflows, WorkflowRuns
@@ -30,6 +35,59 @@ def format_date_for_mcp(dt: datetime) -> str:
     return dt.strftime("%-d %B %Y")
 
 
+async def _fetch_events_apple(
+    config: dict, days: int, now: datetime, end: datetime
+) -> tuple[list[dict], list[str], str, str]:
+    """Apple Calendar fetch path. Returns (events, calendar_labels,
+    from_label, to_label) where the labels are display-friendly."""
+    calendars = config.get("calendars", ["Work", "Family"])
+    from_date = format_date_for_mcp(now)
+    to_date = format_date_for_mcp(end)
+    all_events: list[dict] = []
+    for cal_name in calendars:
+        events = await mcp_client.calendar_list_events(cal_name, from_date, to_date)
+        for ev in events:
+            ev["calendar"] = cal_name
+        all_events.extend(events)
+    return all_events, list(calendars), from_date, to_date
+
+
+async def _fetch_events_google(
+    session: AsyncSession,
+    workflow: UserWorkflows,
+    config: dict,
+    days: int,
+    now: datetime,
+    end: datetime,
+) -> tuple[list[dict], list[str], str, str]:
+    """Google Calendar fetch path. Returns (events, calendar_labels,
+    from_label, to_label). Calendar labels come from the API's display
+    summaries so the digest names them the same way the user sees them
+    in Google Calendar."""
+    account_id = config.get("account_id")
+    if not isinstance(account_id, int):
+        raise ValueError("config.account_id required when service=google_calendar")
+    calendar_ids = config.get("calendar_ids") or []
+    if not calendar_ids:
+        raise ValueError(
+            "config.calendar_ids must list at least one calendar id when service=google_calendar"
+        )
+    events = await google_calendar_client.calendar_list_events(
+        session,
+        account_id=account_id,
+        calendar_ids=list(calendar_ids),
+        time_min=now.replace(tzinfo=timezone.utc),
+        time_max=end.replace(tzinfo=timezone.utc),
+        workflow_id=workflow.workflow_id,
+    )
+    # Calendar labels for the report header — derive from the events
+    # we got back so empty calendars don't show up if they had no events.
+    labels = sorted({ev.get("calendar", "") for ev in events if ev.get("calendar")})
+    from_label = now.strftime("%Y-%m-%d")
+    to_label = end.strftime("%Y-%m-%d")
+    return events, labels, from_label, to_label
+
+
 async def run_calendar_digest(
     session: AsyncSession,
     workflow: UserWorkflows,
@@ -37,8 +95,8 @@ async def run_calendar_digest(
 ) -> WorkflowRuns:
     """Execute the calendar digest pipeline."""
     config = workflow.config or {}
-    calendars = config.get("calendars", ["Work", "Family"])
-    days = config.get("days", 7)
+    service = (config.get("service") or "apple_calendar").lower()
+    days = int(config.get("days", 7))
 
     run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
     output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
@@ -49,27 +107,33 @@ async def run_calendar_digest(
 
         now = datetime.now()
         end = now + timedelta(days=days)
-        from_date = format_date_for_mcp(now)
-        to_date = format_date_for_mcp(end)
 
-        all_events = []
-        for cal_name in calendars:
-            events = await mcp_client.calendar_list_events(cal_name, from_date, to_date)
-            for ev in events:
-                ev["calendar"] = cal_name
-            all_events.extend(events)
+        if service == "google_calendar":
+            all_events, calendars, from_date, to_date = await _fetch_events_google(
+                session, workflow, config, days, now, end
+            )
+        else:
+            all_events, calendars, from_date, to_date = await _fetch_events_apple(
+                config, days, now, end
+            )
 
         if not all_events:
             await engine.complete_step(session, step1, output_summary=f"No events found in next {days} days")
             await engine.complete_run(session, run)
             return run
 
-        # Sort chronologically
+        # Sort chronologically — startDate is ISO 8601 from Google or
+        # Apple's locale string; both sort lexically within the same
+        # service. (Mixed-service mixing isn't a thing — each run uses
+        # one service.)
         all_events.sort(key=lambda e: e.get("startDate", ""))
 
         await engine.complete_step(
             session, step1,
-            output_summary=f"Fetched {len(all_events)} events from {len(calendars)} calendars ({days} days)",
+            output_summary=(
+                f"Fetched {len(all_events)} events from {len(calendars)} calendars "
+                f"({days} days, {service})"
+            ),
         )
 
         # ── Step 2: Analyze with LLM ─────────────────────────
