@@ -50,8 +50,21 @@ log = get_logger("gmail_oauth")
 router_gmail_oauth = APIRouter(prefix="/gmail")
 
 
-# Read-only scope only for B1. B2 will add gmail.send + gmail.compose.
-SCOPES = "https://www.googleapis.com/auth/gmail.readonly"
+# Per-customer scopes:
+#   gmail.readonly — list/get/search messages (B1, types 1 / 5 / 6 read path)
+#   gmail.compose  — create drafts via users.drafts.create (type 5 + the
+#                    type 6 "save as draft" approval action)
+#   gmail.send     — send messages via users.messages.send (the type 6
+#                    "approve and send" action)
+# Existing accounts connected before B2 will need to re-consent (the next
+# call to the connect button on /app/connections triggers Google's consent
+# screen with the new scopes; on success the row's `scopes` column is
+# overwritten by the new set).
+SCOPES = " ".join([
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+])
 
 # State JWT lifetime: longer than a slow Google OAuth round-trip but short
 # enough that a stale state token can't be replayed weeks later.
