@@ -7,10 +7,13 @@ User reviews drafts later in their email client.
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import EmailAutoReplyLog, UserWorkflows, WorkflowRuns
-from backend.services import mcp_client
+from backend.services import gmail_client, mcp_client
 from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
-from backend.services.workflows.email_auto_reply_engine import find_and_generate_candidates
+from backend.services.workflows.email_auto_reply_engine import (
+    _service_of,
+    find_and_generate_candidates,
+)
 
 log = get_logger("email_auto_reply_draft")
 
@@ -22,7 +25,9 @@ async def run_email_auto_reply_draft(
 ) -> WorkflowRuns:
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger, config=workflow.config)
     config = workflow.config or {}
-    from_account = config.get("account", "iCloud")
+    service = _service_of(workflow)
+    from_account = config.get("account", "iCloud")  # apple_mail label, only used for apple path
+    gmail_account_id = config.get("account_id") if service == "gmail" else None
     sender_filter = (config.get("sender_filter") or "").strip()
     body_contains = (config.get("body_contains") or "").strip()
 
@@ -51,12 +56,23 @@ async def run_email_auto_reply_draft(
         errors: list[str] = []
         for c in candidates:
             try:
-                await mcp_client.mail_save_draft(
-                    to=c.to_address,
-                    subject=c.reply_subject,
-                    body=c.reply_body,
-                    from_account=from_account,
-                )
+                if service == "gmail":
+                    await gmail_client.gmail_save_draft(
+                        session,
+                        account_id=gmail_account_id,
+                        to=c.to_address,
+                        subject=c.reply_subject,
+                        body=c.reply_body,
+                        workflow_id=workflow.workflow_id,
+                        run_id=run.run_id,
+                    )
+                else:
+                    await mcp_client.mail_save_draft(
+                        to=c.to_address,
+                        subject=c.reply_subject,
+                        body=c.reply_body,
+                        from_account=from_account,
+                    )
             except Exception as e:
                 errors.append(f"{c.source_message_id}: {str(e)[:120]}")
                 log.error("draft_save_failed", msg_id=c.source_message_id, error=str(e))
@@ -86,7 +102,10 @@ async def run_email_auto_reply_draft(
 
         await session.commit()
 
-        summary = f"Saved {saved} of {len(candidates)} drafts to {from_account} Drafts."
+        location_label = candidates[0].source_account if candidates else (
+            "Gmail" if service == "gmail" else from_account
+        )
+        summary = f"Saved {saved} of {len(candidates)} drafts to {location_label} Drafts."
         if covered_total:
             summary += f" Consolidated {covered_total} older sibling message(s) under their newer sender."
         if errors:
@@ -107,7 +126,7 @@ async def run_email_auto_reply_draft(
         with open(log_path, "w") as f:
             f.write(f"Auto-Reply (Draft Only) — run #{run.run_id}\n")
             f.write(f"Workflow: #{workflow.workflow_id}  {workflow.name}\n")
-            f.write(f"Account: {from_account}\n")
+            f.write(f"Account: {location_label}\n")
             f.write(f"Saved: {saved} / {len(candidates)}\n")
             if covered_total:
                 f.write(f"Older sibling messages folded in (dedup'd): {covered_total}\n")
