@@ -27,8 +27,8 @@ from io import StringIO
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.models import EmailAutoReplyLog, UserWorkflows
-from backend.services import llm_service, mcp_client
+from backend.db.models import EmailAutoReplyLog, GmailAccounts, UserWorkflows
+from backend.services import gmail_client, llm_service, mcp_client
 from backend.services.logger_service import get_logger
 
 log = get_logger("email_auto_reply")
@@ -239,25 +239,107 @@ def _extract_email_from_body(body: str, body_email_field: str) -> str:
     return m.group(1) if m else ""
 
 
+def _service_of(workflow: UserWorkflows) -> str:
+    """Per-workflow mail service: 'apple_mail' (default for legacy types) or 'gmail'.
+    Mirrors the convention type 1 (Email Topic Monitor) introduced in B1."""
+    return ((workflow.config or {}).get("service") or "apple_mail").lower()
+
+
+async def _resolve_account_label(
+    session: AsyncSession, workflow: UserWorkflows
+) -> str:
+    """Human-readable account label for storage in workflow_artifacts /
+    pending_email_replies.source_account. For apple_mail this is the
+    AppleScript account name; for gmail it's the connected email
+    address (looked up from gmail_accounts)."""
+    cfg = workflow.config or {}
+    if _service_of(workflow) == "gmail":
+        aid = cfg.get("account_id")
+        if isinstance(aid, int):
+            row = await session.get(GmailAccounts, aid)
+            if row:
+                return row.email
+        return f"gmail:{aid}" if aid else "gmail"
+    return cfg.get("account", "iCloud")
+
+
+async def _list_inbox_messages(
+    session: AsyncSession, workflow: UserWorkflows, limit: int
+) -> list[dict]:
+    """Service-aware inbox list. Returned dicts always carry id + sender
+    so the cheap pre-filter on sender works the same for both services."""
+    cfg = workflow.config or {}
+    mailbox = cfg.get("mailbox", "INBOX")
+    if _service_of(workflow) == "gmail":
+        account_id = cfg.get("account_id")
+        if not isinstance(account_id, int):
+            raise ValueError("config.account_id required when service=gmail")
+        return await gmail_client.gmail_list_messages(
+            session,
+            account_id=account_id,
+            mailbox=mailbox,
+            limit=limit,
+            workflow_id=workflow.workflow_id,
+        )
+    account = cfg.get("account", "iCloud")
+    return await mcp_client.mail_list_messages(account, mailbox, limit=limit)
+
+
+async def _get_full_message(
+    session: AsyncSession, workflow: UserWorkflows, msg_id: str
+) -> dict:
+    """Service-aware full-message fetch. Returned dict carries body,
+    sender, subject, date, and (for gmail) reply_to."""
+    cfg = workflow.config or {}
+    mailbox = cfg.get("mailbox", "INBOX")
+    if _service_of(workflow) == "gmail":
+        account_id = cfg.get("account_id")
+        return await gmail_client.gmail_get_message(
+            session,
+            account_id=account_id,
+            message_id=msg_id,
+            workflow_id=workflow.workflow_id,
+        )
+    account = cfg.get("account", "iCloud")
+    return await mcp_client.mail_get_message(account, mailbox, int(msg_id))
+
+
+def _parse_message_date(workflow: UserWorkflows, date_str: str) -> datetime | None:
+    """Per-service date parsing. Apple Mail emits its locale-formatted
+    string ('Wednesday, April 15, 2026 at 4:11:39 PM'); Gmail emits
+    ISO 8601 with timezone (per gmail_client._normalize_date)."""
+    if not date_str:
+        return None
+    if _service_of(workflow) == "gmail":
+        try:
+            return datetime.fromisoformat(date_str)
+        except ValueError:
+            return None
+    return _parse_mail_date(date_str)
+
+
 async def _resolve_to_address(
+    workflow: UserWorkflows,
     full_msg: dict,
     source_from: str,
     body: str,
     body_email_field: str,
-    account: str,
-    mailbox: str,
     message_id: str,
 ) -> str:
     """Decide where the auto-reply should go.
 
     Priority order — first non-empty result wins:
-      1. Body-field extraction (e.g. Squarespace's `Email:` line) — most reliable
-         for known form templates because the submitter explicitly types it
-      2. AppleScript Reply-To fetch — Mail.app exposes `reply to` even though
-         the MCP doesn't surface it in get_message
-      3. MCP `reply_to` / `replyTo` keys (future-proofing if the MCP adds them)
+      1. Body-field extraction (e.g. Squarespace's `Email:` line) — most
+         reliable for known form templates because the submitter explicitly
+         types it.
+      2. The full-message dict's `reply_to` field. For Gmail this is set
+         directly from the Reply-To header by gmail_client. For Apple
+         Mail the MCP doesn't surface it in get_message, so we fall
+         through to step 3.
+      3. AppleScript Reply-To fetch — only when service=apple_mail. Gmail
+         already handled this in step 2.
       4. The From address — last resort; for transport senders like
-         form-submission@squarespace.info this is wrong, but better than nothing
+         form-submission@squarespace.info this is wrong, but better than nothing.
     """
     # 1. Body-field extraction
     if body_email_field:
@@ -265,23 +347,27 @@ async def _resolve_to_address(
         if addr:
             return addr
 
-    # 2. AppleScript Reply-To
-    try:
-        rt_raw = await mcp_client.mail_get_reply_to(account, mailbox, int(message_id))
-    except Exception as e:
-        log.warning("applescript_reply_to_failed", msg_id=message_id, error=str(e))
-        rt_raw = None
-    if rt_raw:
-        addr = _extract_email(rt_raw)
+    # 2. full_msg reply_to (Gmail; or future-proofing if Apple MCP adds it)
+    msg_rt = full_msg.get("reply_to") or full_msg.get("replyTo") or ""
+    if msg_rt:
+        addr = _extract_email(msg_rt)
         if addr:
             return addr
 
-    # 3. MCP reply_to keys (future-proofing)
-    mcp_rt = full_msg.get("reply_to") or full_msg.get("replyTo") or ""
-    if mcp_rt:
-        addr = _extract_email(mcp_rt)
-        if addr:
-            return addr
+    # 3. AppleScript Reply-To — only meaningful for apple_mail
+    if _service_of(workflow) == "apple_mail":
+        cfg = workflow.config or {}
+        account = cfg.get("account", "iCloud")
+        mailbox = cfg.get("mailbox", "INBOX")
+        try:
+            rt_raw = await mcp_client.mail_get_reply_to(account, mailbox, int(message_id))
+        except Exception as e:
+            log.warning("applescript_reply_to_failed", msg_id=message_id, error=str(e))
+            rt_raw = None
+        if rt_raw:
+            addr = _extract_email(rt_raw)
+            if addr:
+                return addr
 
     # 4. From — last resort
     return _extract_email(source_from)
@@ -329,20 +415,20 @@ async def find_and_generate_candidates(
     in additional_handled_message_ids.
     """
     config = workflow.config or {}
-    account = config.get("account", "iCloud")
-    mailbox = config.get("mailbox", "INBOX")
     sender_filter = (config.get("sender_filter") or "").strip()
     body_contains = (config.get("body_contains") or "").strip()
     body_email_field = (config.get("body_email_field") or "").strip()
     signature = config.get("signature") or ""
     tone = config.get("tone") or "warm and professional"
     fetch_limit = int(config.get("fetch_limit") or 50)
+    mailbox = config.get("mailbox", "INBOX")
+    account_label = await _resolve_account_label(session, workflow)
 
     batch = CandidateBatch()
 
     # Empty-filter safety guard — return immediately, do NOT touch the inbox.
     # Without this fast-path, the loop below would still skip each message via
-    # _matches_filters, but only after paying for an MCP body fetch per message
+    # _matches_filters, but only after paying for a body fetch per message
     # (10–30s wasted to return zero candidates).
     if not sender_filter and not body_contains:
         batch.short_circuit_reason = "empty_filters"
@@ -353,7 +439,7 @@ async def find_and_generate_candidates(
         return batch
 
     # ── Phase 1: fetch, filter, group by to_address ──────────────
-    messages = await mcp_client.mail_list_messages(account, mailbox, limit=fetch_limit)
+    messages = await _list_inbox_messages(session, workflow, fetch_limit)
     batch.total_listed = len(messages)
     if not messages:
         batch.short_circuit_reason = "no_messages"
@@ -387,7 +473,7 @@ async def find_and_generate_candidates(
         batch.matched_sender += 1
 
         try:
-            full = await mcp_client.mail_get_message(account, mailbox, int(msg_id))
+            full = await _get_full_message(session, workflow, msg_id)
         except Exception as e:
             log.warning("mail_get_message_failed", msg_id=msg_id, error=str(e))
             continue
@@ -395,9 +481,12 @@ async def find_and_generate_candidates(
         body = full.get("body") or full.get("content") or ""
         # Mail.app's `content` scripting property returns empty for HTML-only
         # messages (no multipart text/plain alternative). When that happens,
-        # fall back to RFC822 source + parser.
-        if not body.strip():
-            body = await _fetch_body_fallback(account, mailbox, msg_id)
+        # fall back to RFC822 source + parser. (Gmail's _extract_body already
+        # handles HTML/plain/multipart, so this branch is a no-op there.)
+        if not body.strip() and _service_of(workflow) == "apple_mail":
+            cfg = workflow.config or {}
+            ap_account = cfg.get("account", "iCloud")
+            body = await _fetch_body_fallback(ap_account, mailbox, msg_id)
             if body:
                 log.info("auto_reply_body_fallback_used", msg_id=msg_id, length=len(body))
 
@@ -410,19 +499,18 @@ async def find_and_generate_candidates(
         batch.matched_both += 1
 
         to_address = await _resolve_to_address(
+            workflow=workflow,
             full_msg=full,
             source_from=source_from,
             body=body,
             body_email_field=body_email_field,
-            account=account,
-            mailbox=mailbox,
             message_id=msg_id,
         )
         if not to_address:
             log.warning("auto_reply_no_reply_to", msg_id=msg_id)
             continue
 
-        parsed_date = _parse_mail_date(full.get("date") or msg.get("date") or "")
+        parsed_date = _parse_message_date(workflow, full.get("date") or msg.get("date") or "")
 
         grouped.setdefault(to_address.lower(), []).append({
             "msg_id": msg_id,
@@ -487,7 +575,7 @@ async def find_and_generate_candidates(
         candidates.append(
             ReplyCandidate(
                 source_message_id=winner["msg_id"],
-                source_account=account,
+                source_account=account_label,
                 source_mailbox=mailbox,
                 source_from=winner["source_from"],
                 source_subject=winner["source_subject"],
