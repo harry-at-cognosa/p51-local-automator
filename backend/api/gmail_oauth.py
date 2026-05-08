@@ -50,20 +50,22 @@ log = get_logger("gmail_oauth")
 router_gmail_oauth = APIRouter(prefix="/gmail")
 
 
-# Per-customer scopes:
-#   gmail.readonly — list/get/search messages (B1, types 1 / 5 / 6 read path)
-#   gmail.compose  — create drafts via users.drafts.create (type 5 + the
-#                    type 6 "save as draft" approval action)
-#   gmail.send     — send messages via users.messages.send (the type 6
-#                    "approve and send" action)
-# Existing accounts connected before B2 will need to re-consent (the next
-# call to the connect button on /app/connections triggers Google's consent
-# screen with the new scopes; on success the row's `scopes` column is
-# overwritten by the new set).
+# Per-customer scopes (gmail_accounts is the storage; conceptually the
+# table now holds all per-Google-account credentials, not just Gmail):
+#   gmail.readonly    — list/get/search messages (B1; types 1/5/6 read)
+#   gmail.compose     — drafts.create (type 5 + type-6 save-as-draft)
+#   gmail.send        — messages.send (type-6 approve-and-send)
+#   calendar.readonly — list calendars + events.list (Google Calendar
+#                       digest, type 3 google_calendar service path)
+# Existing accounts connected before a scope expansion need to re-consent
+# (the next click of Connect on /app/connections triggers Google's
+# consent screen with the current SCOPES set; on success the row's
+# `scopes` column is overwritten with the new set).
 SCOPES = " ".join([
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar.readonly",
 ])
 
 # State JWT lifetime: longer than a slow Google OAuth round-trip but short
