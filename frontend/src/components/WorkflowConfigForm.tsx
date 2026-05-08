@@ -110,45 +110,10 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
     );
   }
 
-  // Calendar Digest
+  // Calendar Digest — apple_calendar (existing) or google_calendar (Track GC).
+  // Subcomponent owns hooks for the lazy-fetch of the Google calendar list.
   if (typeId === 3) {
-    const selectedCals = (config.calendars as string[]) || ["Work", "Family"];
-    return (
-      <Row className="g-3">
-        <Col md={6}>
-          <Form.Group>
-            <Form.Label>Calendars</Form.Label>
-            {CALENDAR_OPTIONS.map((cal) => (
-              <Form.Check
-                key={cal}
-                type="checkbox"
-                label={cal}
-                checked={selectedCals.includes(cal)}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    set("calendars", [...selectedCals, cal]);
-                  } else {
-                    set("calendars", selectedCals.filter((c) => c !== cal));
-                  }
-                }}
-              />
-            ))}
-          </Form.Group>
-        </Col>
-        <Col md={6}>
-          <Form.Group>
-            <Form.Label>Days Ahead</Form.Label>
-            <Form.Control
-              type="number"
-              min={1}
-              max={90}
-              value={(config.days as number) || 7}
-              onChange={(e) => set("days", Number(e.target.value))}
-            />
-          </Form.Group>
-        </Col>
-      </Row>
-    );
+    return <Type3CalendarDigestForm config={config} onChange={onChange} set={set} />;
   }
 
   // SQL Query Runner
@@ -591,6 +556,194 @@ function Type56AutoReplyForm({ config, onChange, set }: Type56Props) {
           />
         </Form.Group>
       </Col>
+    </Row>
+  );
+}
+
+
+// ── Type 3 Calendar Digest — apple_calendar or google_calendar (Track GC) ──
+
+interface Type3Props {
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+  set: (key: string, value: unknown) => void;
+}
+
+interface GoogleCalendarOption {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: string;
+  color: string;
+}
+
+function Type3CalendarDigestForm({ config, onChange, set }: Type3Props) {
+  const service = (config.service as string) || "apple_calendar";
+
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [gmailError, setGmailError] = useState<string | null>(null);
+
+  const [calendars, setCalendars] = useState<GoogleCalendarOption[]>([]);
+  const [calendarsLoading, setCalendarsLoading] = useState(false);
+  const [calendarsError, setCalendarsError] = useState<string | null>(null);
+
+  const accountId = config.account_id as number | undefined;
+
+  // Load gmail accounts when service flips to google_calendar.
+  useEffect(() => {
+    if (service !== "google_calendar") return;
+    setGmailLoading(true);
+    setGmailError(null);
+    axiosClient
+      .get<GmailAccountOption[]>("/gmail/accounts")
+      .then((res) => setGmailAccounts(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setGmailError(err?.response?.data?.detail || err?.message || "Failed to load Google accounts.");
+      })
+      .finally(() => setGmailLoading(false));
+  }, [service]);
+
+  // Load calendars when an account is picked.
+  useEffect(() => {
+    if (service !== "google_calendar" || !accountId) {
+      setCalendars([]);
+      return;
+    }
+    setCalendarsLoading(true);
+    setCalendarsError(null);
+    axiosClient
+      .get<GoogleCalendarOption[]>(`/google-calendar/calendars?account_id=${accountId}`)
+      .then((res) => setCalendars(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setCalendarsError(err?.response?.data?.detail || err?.message || "Failed to load calendars.");
+      })
+      .finally(() => setCalendarsLoading(false));
+  }, [service, accountId]);
+
+  const handleServiceChange = (newService: string) => {
+    const next: Record<string, unknown> = { ...config, service: newService };
+    delete next.calendars;
+    delete next.calendar_ids;
+    delete next.account_id;
+    onChange(next);
+  };
+
+  const activeGmailAccounts = gmailAccounts.filter((a) => a.status === "active");
+  const selectedAppleCals = (config.calendars as string[]) || ["Work", "Family"];
+  const selectedGoogleCalIds = (config.calendar_ids as string[]) || [];
+
+  return (
+    <Row className="g-3">
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Calendar Service</Form.Label>
+          <Form.Select
+            value={service}
+            onChange={(e) => handleServiceChange(e.target.value)}
+          >
+            <option value="apple_calendar">Apple Calendar</option>
+            <option value="google_calendar">Google Calendar (Workspace)</option>
+          </Form.Select>
+        </Form.Group>
+      </Col>
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Days Ahead</Form.Label>
+          <Form.Control
+            type="number"
+            min={1}
+            max={90}
+            value={(config.days as number) || 7}
+            onChange={(e) => set("days", Number(e.target.value))}
+          />
+        </Form.Group>
+      </Col>
+
+      {service === "apple_calendar" ? (
+        <Col md={12}>
+          <Form.Group>
+            <Form.Label>Calendars</Form.Label>
+            {CALENDAR_OPTIONS.map((cal) => (
+              <Form.Check
+                key={cal}
+                type="checkbox"
+                label={cal}
+                checked={selectedAppleCals.includes(cal)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    set("calendars", [...selectedAppleCals, cal]);
+                  } else {
+                    set("calendars", selectedAppleCals.filter((c) => c !== cal));
+                  }
+                }}
+              />
+            ))}
+          </Form.Group>
+        </Col>
+      ) : (
+        <>
+          <Col md={6}>
+            <Form.Group>
+              <Form.Label>Google Account</Form.Label>
+              <Form.Select
+                value={accountId ?? ""}
+                onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
+                disabled={gmailLoading || activeGmailAccounts.length === 0}
+              >
+                <option value="">— select an account —</option>
+                {activeGmailAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.email}</option>
+                ))}
+              </Form.Select>
+              {gmailLoading && <Form.Text className="text-muted">Loading accounts…</Form.Text>}
+              {gmailError && <Form.Text className="text-danger">{gmailError}</Form.Text>}
+              {!gmailLoading && !gmailError && activeGmailAccounts.length === 0 && (
+                <Form.Text className="text-muted">
+                  No active Google accounts. Connect one at <code>/app/connections</code>.
+                </Form.Text>
+              )}
+            </Form.Group>
+          </Col>
+          <Col md={12}>
+            <Form.Group>
+              <Form.Label>Calendars</Form.Label>
+              {!accountId && <Form.Text className="text-muted d-block">Select an account above first.</Form.Text>}
+              {accountId !== undefined && calendarsLoading && (
+                <Form.Text className="text-muted d-block">Loading calendars…</Form.Text>
+              )}
+              {calendarsError && (
+                <Form.Text className="text-danger d-block">{calendarsError}</Form.Text>
+              )}
+              {accountId !== undefined && !calendarsLoading && !calendarsError && calendars.length === 0 && (
+                <Form.Text className="text-muted d-block">No calendars found.</Form.Text>
+              )}
+              {calendars.map((cal) => (
+                <Form.Check
+                  key={cal.id}
+                  type="checkbox"
+                  label={
+                    <>
+                      {cal.summary}
+                      {cal.primary && <Badge bg="secondary" className="ms-2">primary</Badge>}
+                    </>
+                  }
+                  checked={selectedGoogleCalIds.includes(cal.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      set("calendar_ids", [...selectedGoogleCalIds, cal.id]);
+                    } else {
+                      set("calendar_ids", selectedGoogleCalIds.filter((c) => c !== cal.id));
+                    }
+                  }}
+                />
+              ))}
+            </Form.Group>
+          </Col>
+        </>
+      )}
     </Row>
   );
 }
