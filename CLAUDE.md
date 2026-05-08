@@ -10,7 +10,7 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 - **Frontend:** React 19 + TypeScript + Vite + Bootstrap + Zustand
 - **Auth:** fastapi-users + JWT (7-day tokens), roles: superuser, groupadmin, manager, employee
 - **LLM:** Anthropic SDK (direct, no CrewAI)
-- **Services:** Local MCP servers for Apple Mail, Apple Calendar; direct Gmail API (Track B Phase B1) for Workspace email; Google Workspace MCP for calendar (TBD).
+- **Services:** Local MCP servers for Apple Mail, Apple Calendar; direct Gmail API (Track B Phase B1/B2) for Workspace email; direct Google Calendar API (Track GC) for Workspace calendar. The `gmail_accounts` table stores OAuth credentials for all Google services on a per-account basis (despite the name) — Gmail and Calendar share the same row; new services add scopes + check for them in `account.scopes`.
 - **Scheduling:** APScheduler (in-process)
 - **Data:** PostgreSQL for structured data, filesystem for artifacts, optional Google Sheets output
 
