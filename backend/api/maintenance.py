@@ -29,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.auth.users import current_active_user
 from backend.db.models import (
     ApiGroups,
+    ConversationMessages,
+    Conversations,
     EmailAutoReplyLog,
     MaintenanceLog,
     PendingEmailReplies,
@@ -495,17 +497,62 @@ async def purge_runs(
 
     # After the run sweep, drop soft-deleted workflows that now have no
     # remaining runs. This is the same set we projected in the dry-run.
-    drop_stmt = (
-        delete(UserWorkflows)
-        .where(UserWorkflows.deleted == 1)
-        .where(
-            ~select(WorkflowRuns.run_id)
-            .where(WorkflowRuns.workflow_id == UserWorkflows.workflow_id)
-            .exists()
+    #
+    # Three other tables (email_auto_reply_log, pending_email_replies,
+    # conversations) carry their own workflow_id FK to user_workflows.
+    # The per-run cleanup above only handles rows scoped to a run we
+    # purged — rows with NULL pending_id or rows on workflows whose runs
+    # were never touched still reference the workflow. Clean those first
+    # or the user_workflows DELETE hits a foreign-key violation.
+    candidate_workflow_ids = [
+        row[0]
+        for row in (
+            await session.execute(
+                select(UserWorkflows.workflow_id)
+                .where(UserWorkflows.deleted == 1)
+                .where(
+                    ~select(WorkflowRuns.run_id)
+                    .where(WorkflowRuns.workflow_id == UserWorkflows.workflow_id)
+                    .exists()
+                )
+            )
+        ).all()
+    ]
+
+    if candidate_workflow_ids:
+        await session.execute(
+            delete(EmailAutoReplyLog).where(
+                EmailAutoReplyLog.workflow_id.in_(candidate_workflow_ids)
+            )
         )
-    )
-    drop_result = await session.execute(drop_stmt)
-    workflows_dropped_actual = drop_result.rowcount or 0
+        await session.execute(
+            delete(PendingEmailReplies).where(
+                PendingEmailReplies.workflow_id.in_(candidate_workflow_ids)
+            )
+        )
+        # conversations chain: messages first, then the conversation rows.
+        await session.execute(
+            delete(ConversationMessages).where(
+                ConversationMessages.conversation_id.in_(
+                    select(Conversations.conversation_id).where(
+                        Conversations.workflow_id.in_(candidate_workflow_ids)
+                    )
+                )
+            )
+        )
+        await session.execute(
+            delete(Conversations).where(
+                Conversations.workflow_id.in_(candidate_workflow_ids)
+            )
+        )
+        drop_result = await session.execute(
+            delete(UserWorkflows).where(
+                UserWorkflows.workflow_id.in_(candidate_workflow_ids)
+            )
+        )
+        workflows_dropped_actual = drop_result.rowcount or 0
+    else:
+        workflows_dropped_actual = 0
 
     result.bytes_freed = bytes_freed_actual
     result.workflows_dropped = int(workflows_dropped_actual)
