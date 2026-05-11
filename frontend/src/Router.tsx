@@ -14,6 +14,7 @@ import ManageWorkflowCategories from "./pages/ManageWorkflowCategories";
 import ManageWorkflowTypes from "./pages/ManageWorkflowTypes";
 import Settings from "./pages/Settings";
 import GroupSettings from "./pages/GroupSettings";
+import Maintenance from "./pages/Maintenance";
 
 export const Router = createBrowserRouter([
   {
@@ -67,6 +68,10 @@ export const Router = createBrowserRouter([
       {
         path: "admin/group-settings",
         element: <GroupSettings />,
+      },
+      {
+        path: "admin/maintenance",
+        element: <Maintenance />,
       },
       {
         path: "logout",
