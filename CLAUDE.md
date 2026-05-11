@@ -39,6 +39,7 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 - User input files: `<file_system_root>/{group_id}/{user_id}/inputs/` — per-user sandbox surfaced to the workflow config UI by the `GET /api/v1/files/list` endpoint and the `<FilePicker>` component. Reusable across all workflows owned by that user.
 - `workflow_types.schedulable` (added in A1.1, default TRUE): per-type flag. FALSE for cron-incompatible types (e.g. AWF-1 "Analyze Data Collection" — too expensive/slow to fire from cron). Frontend hides schedule UI when false.
 - New workflow types should ship with a populated `config_schema` and let the schema-driven `SchemaConfigForm` render their config UI rather than adding another typeId branch in `WorkflowConfigForm.tsx`. Types 1–6 keep their hand-tuned forms; AWF-1 (type 7) is the first schema-only type.
+- `workflow_runs.archived` (added in M.1): set TRUE by the archive sweep to hide runs from non-superuser read paths. Every run-surfacing query must filter `archived = false` unless the caller is superuser AND opts in (`?include_archived=true` on the list/runs endpoints). Purge ignores the flag and hard-deletes. Admin UI lives at `/app/admin/maintenance`; audit history in the `maintenance_log` table.
 
 ## Database
 
