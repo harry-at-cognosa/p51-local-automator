@@ -7,6 +7,7 @@ import {
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
+import { useAuthStore } from "../stores/useAuthStore";
 
 interface WorkflowCategoryNested {
   category_id: number;
@@ -49,13 +50,16 @@ interface WorkflowRun {
   completed_at: string | null;
   error_detail: string | null;
   artifact_count: number;
+  archived: boolean;
 }
 
 export default function WorkflowDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { is_superuser } = useAuthStore();
   const [workflow, setWorkflow] = useState<UserWorkflow | null>(null);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [running, setRunning] = useState(false);
   const [runMessage, setRunMessage] = useState("");
   const [showConfig, setShowConfig] = useState(false);
@@ -79,10 +83,14 @@ export default function WorkflowDetail() {
         setPendingCount(null);
       }
     });
-    axiosClient.get(`/workflows/${id}/runs`).then((res) => setRuns(res.data));
+    const runsUrl =
+      showArchived && is_superuser
+        ? `/workflows/${id}/runs?include_archived=true`
+        : `/workflows/${id}/runs`;
+    axiosClient.get(runsUrl).then((res) => setRuns(res.data));
   };
 
-  useEffect(() => { fetchData(); }, [id]);
+  useEffect(() => { fetchData(); }, [id, showArchived]);
 
   const triggerRun = async () => {
     setRunning(true);
@@ -92,7 +100,11 @@ export default function WorkflowDetail() {
       setRunMessage(res.data.detail);
       // Poll for completion
       const poll = setInterval(async () => {
-        const runsRes = await axiosClient.get(`/workflows/${id}/runs`);
+        const pollUrl =
+          showArchived && is_superuser
+            ? `/workflows/${id}/runs?include_archived=true`
+            : `/workflows/${id}/runs`;
+        const runsRes = await axiosClient.get(pollUrl);
         setRuns(runsRes.data);
         const latest = runsRes.data[0];
         if (latest && (latest.status === "completed" || latest.status === "failed")) {
@@ -277,7 +289,19 @@ export default function WorkflowDetail() {
       )}
 
       <Card className="mt-3">
-        <Card.Header>Run History</Card.Header>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <span>Run History</span>
+          {is_superuser && (
+            <Form.Check
+              type="switch"
+              id="show-archived-runs"
+              label="Show archived"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="small text-muted"
+            />
+          )}
+        </Card.Header>
         <Card.Body className="p-0">
           {runs.length === 0 ? (
             <p className="text-muted p-3 mb-0">No runs yet. Click "Run Now" to start.</p>
@@ -300,8 +324,18 @@ export default function WorkflowDetail() {
                     ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
                     : null;
                   return (
-                    <tr key={r.run_id}>
-                      <td>#{r.run_id}</td>
+                    <tr
+                      key={r.run_id}
+                      style={r.archived ? { opacity: 0.55, fontStyle: "italic" } : undefined}
+                    >
+                      <td>
+                        #{r.run_id}
+                        {r.archived && (
+                          <Badge bg="secondary" className="ms-2" pill style={{ fontSize: "0.65rem" }}>
+                            archived
+                          </Badge>
+                        )}
+                      </td>
                       <td><StatusBadge status={r.status} /></td>
                       <td>{r.current_step}/{r.total_steps}</td>
                       <td><Badge bg="light" text="dark">{r.trigger}</Badge></td>
