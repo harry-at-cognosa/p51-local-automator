@@ -306,8 +306,8 @@ export default function Workflows() {
         {types.map((t) => (
           <Col md={6} lg={3} key={t.type_id}>
             <div className="border rounded p-3 h-100">
-              <div className="mb-2 text-muted small text-uppercase">{t.category.short_name}</div>
-              <h6>{t.long_name}</h6>
+              <div className="mb-2 text-muted small text-uppercase">{t.category.category_id}-{t.category.short_name}</div>
+              <h6>{t.type_id}-{t.long_name}</h6>
               <p className="text-muted small mb-0">{t.type_desc}</p>
             </div>
           </Col>
@@ -335,7 +335,7 @@ export default function Workflows() {
                 <option value={0}>Select a type...</option>
                 {types.map((t) => (
                   <option key={t.type_id} value={t.type_id}>
-                    {t.category.short_name} — {t.long_name}
+                    {t.category.category_id}-{t.category.short_name} — {t.type_id}-{t.long_name}
                   </option>
                 ))}
               </Form.Select>
