@@ -189,6 +189,11 @@ class WorkflowRuns(Base):
     # Captured at run start from user_workflows.config. NULL for runs created
     # before the column existed (no authoritative source to backfill).
     config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Set TRUE by the archive sweep (Phase M). Hides the run from non-superuser
+    # views without removing data. Purge sweep hard-deletes regardless.
+    archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     workflow: Mapped["UserWorkflows"] = relationship("UserWorkflows", back_populates="runs")
     steps: Mapped[list["WorkflowSteps"]] = relationship("WorkflowSteps", back_populates="run")
@@ -409,3 +414,39 @@ class GmailTokenUsage(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MaintenanceLog(Base):
+    """Append-only audit row per non-dry-run archive/purge sweep (Phase M).
+
+    Dry-runs do not write rows; only commits do. Bytes_freed is only
+    meaningful for purge (NULL for archive, since archive does not touch
+    disk). Error_detail captures the first ~1000 chars of an exception if
+    a sweep failed partway; counts still reflect what was processed
+    before the failure.
+    """
+    __tablename__ = "maintenance_log"
+
+    log_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    operation: Mapped[str] = mapped_column(VARCHAR(16), nullable=False)  # 'archive' | 'purge'
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("api_users.user_id", name="fk_maintenance_log_user_id"),
+        nullable=False,
+    )
+    scope: Mapped[str] = mapped_column(VARCHAR(16), nullable=False)  # 'all' | 'group'
+    scope_group_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("api_groups.group_id", name="fk_maintenance_log_group_id"),
+        nullable=True,
+    )
+    cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    workflows_affected: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    runs_affected: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    steps_affected: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    artifacts_affected: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    bytes_freed: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
