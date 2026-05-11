@@ -1,0 +1,267 @@
+"""Maintenance admin API (Phase M).
+
+Two-tier housekeeping for accumulated run data, superuser-only:
+
+    POST /admin/maintenance/archive  — reversibly hide old runs from
+                                       non-superuser views (flips a flag,
+                                       leaves data on disk).
+    POST /admin/maintenance/purge    — hard-delete old runs (DB rows +
+                                       on-disk run subdirs); irreversible.
+    GET  /admin/maintenance/log      — history of past sweep actions.
+
+The archive and purge endpoints share their scope/cutoff matching logic
+in `_resolve_target_run_ids` so a dry-run preview returns counts that
+mirror what a commit would touch.
+
+See docs/phase_M_maintenance_archive_purge_260511.md for the design.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, time, timezone
+from typing import Iterable
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.auth.users import current_active_user
+from backend.db.models import (
+    ApiGroups,
+    MaintenanceLog,
+    User,
+    UserWorkflows,
+    WorkflowArtifacts,
+    WorkflowRuns,
+    WorkflowSteps,
+)
+from backend.db.session import async_get_session
+
+
+router_maintenance = APIRouter()
+
+
+# ── Request / response shapes ────────────────────────────────
+
+
+class ArchiveRequest(BaseModel):
+    scope: str = Field(..., description="'all' or 'group'")
+    group_id: int | None = Field(
+        None, description="Required when scope='group'; ignored otherwise"
+    )
+    cutoff: date = Field(..., description="YYYY-MM-DD; runs with started_at before this date are eligible")
+    dry_run: bool = True
+
+
+class MaintenanceResult(BaseModel):
+    workflows_affected: int = 0
+    runs_affected: int = 0
+    steps_affected: int = 0
+    artifacts_affected: int = 0
+    soft_deleted_workflows_included: int = 0
+    # Purge-only fields, left as defaults for archive responses.
+    bytes_freed: int | None = None
+    workflows_dropped: int = 0
+
+
+# ── Internal helpers ─────────────────────────────────────────
+
+
+def _require_superuser(user: User) -> None:
+    if not user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Superuser required"
+        )
+
+
+def _validate_scope(scope: str, group_id: int | None) -> None:
+    if scope == "all":
+        return
+    if scope == "group":
+        if group_id is None:
+            raise HTTPException(
+                status_code=400, detail="group_id required when scope='group'"
+            )
+        return
+    raise HTTPException(status_code=400, detail="scope must be 'all' or 'group'")
+
+
+def _cutoff_to_datetime(cutoff: date) -> datetime:
+    """Treat cutoff as start-of-day UTC. Runs with started_at strictly
+    before this instant are eligible."""
+    return datetime.combine(cutoff, time.min, tzinfo=timezone.utc)
+
+
+async def _resolve_target_run_ids(
+    session: AsyncSession,
+    scope: str,
+    group_id: int | None,
+    cutoff: date,
+    *,
+    only_unarchived: bool = True,
+) -> list[int]:
+    """Return run_ids matching the sweep criteria.
+
+    A run is targeted when:
+      - (the parent workflow is soft-deleted, no date filter applied), OR
+      - the run's started_at is strictly before the cutoff,
+
+    AND it's still active (archived = false) when `only_unarchived` is set
+    (the archive path uses this; purge ignores `archived` since it deletes
+    anyway).
+
+    Group filter, when scope='group', constrains to workflows in that group.
+    """
+    cutoff_dt = _cutoff_to_datetime(cutoff)
+
+    stmt = (
+        select(WorkflowRuns.run_id)
+        .join(UserWorkflows, UserWorkflows.workflow_id == WorkflowRuns.workflow_id)
+        .where(
+            or_(
+                UserWorkflows.deleted == 1,
+                WorkflowRuns.started_at < cutoff_dt,
+            )
+        )
+    )
+    if only_unarchived:
+        stmt = stmt.where(WorkflowRuns.archived.is_(False))
+    if scope == "group":
+        stmt = stmt.where(UserWorkflows.group_id == group_id)
+
+    rows = await session.execute(stmt)
+    return [r[0] for r in rows.all()]
+
+
+async def _count_descendants(
+    session: AsyncSession, run_ids: list[int]
+) -> tuple[int, int, int, int]:
+    """Return (workflow_count, runs_count, steps_count, artifacts_count) for
+    the given set of run_ids. workflow_count is DISTINCT(workflow_id).
+    """
+    if not run_ids:
+        return 0, 0, 0, 0
+
+    workflows_count = await session.scalar(
+        select(func.count(func.distinct(WorkflowRuns.workflow_id))).where(
+            WorkflowRuns.run_id.in_(run_ids)
+        )
+    ) or 0
+
+    runs_count = len(run_ids)
+
+    steps_count = await session.scalar(
+        select(func.count(WorkflowSteps.step_id)).where(
+            WorkflowSteps.run_id.in_(run_ids)
+        )
+    ) or 0
+
+    artifacts_count = await session.scalar(
+        select(func.count(WorkflowArtifacts.artifact_id)).where(
+            WorkflowArtifacts.run_id.in_(run_ids)
+        )
+    ) or 0
+
+    return int(workflows_count), int(runs_count), int(steps_count), int(artifacts_count)
+
+
+async def _count_soft_deleted_workflows_in_set(
+    session: AsyncSession, run_ids: list[int]
+) -> int:
+    """Distinct workflow_id count among the run_ids whose parent workflow
+    is soft-deleted. Surfaced in the result so the operator can tell how
+    much of the sweep is the auto-included soft-deleted bucket."""
+    if not run_ids:
+        return 0
+    return int(
+        await session.scalar(
+            select(func.count(func.distinct(WorkflowRuns.workflow_id)))
+            .join(UserWorkflows, UserWorkflows.workflow_id == WorkflowRuns.workflow_id)
+            .where(WorkflowRuns.run_id.in_(run_ids))
+            .where(UserWorkflows.deleted == 1)
+        ) or 0
+    )
+
+
+async def _write_maintenance_log(
+    session: AsyncSession,
+    *,
+    operation: str,
+    user_id: int,
+    scope: str,
+    group_id: int | None,
+    cutoff: date,
+    counts: MaintenanceResult,
+    bytes_freed: int | None = None,
+    error_detail: str | None = None,
+) -> None:
+    log = MaintenanceLog(
+        operation=operation,
+        user_id=user_id,
+        scope=scope,
+        scope_group_id=group_id if scope == "group" else None,
+        cutoff=_cutoff_to_datetime(cutoff),
+        workflows_affected=counts.workflows_affected,
+        runs_affected=counts.runs_affected,
+        steps_affected=counts.steps_affected,
+        artifacts_affected=counts.artifacts_affected,
+        bytes_freed=bytes_freed,
+        error_detail=error_detail,
+    )
+    session.add(log)
+
+
+# ── Archive endpoint (M.3) ──────────────────────────────────
+
+
+@router_maintenance.post(
+    "/admin/maintenance/archive", response_model=MaintenanceResult
+)
+async def archive_runs(
+    payload: ArchiveRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+) -> MaintenanceResult:
+    """Archive runs older than `cutoff` (plus all runs of soft-deleted
+    workflows, regardless of date). Dry-run returns counts only; commit
+    flips archived=true and writes a maintenance_log row.
+    """
+    _require_superuser(user)
+    _validate_scope(payload.scope, payload.group_id)
+
+    run_ids = await _resolve_target_run_ids(
+        session, payload.scope, payload.group_id, payload.cutoff
+    )
+    workflows_count, runs_count, steps_count, artifacts_count = await _count_descendants(
+        session, run_ids
+    )
+    soft_deleted_workflows = await _count_soft_deleted_workflows_in_set(session, run_ids)
+
+    result = MaintenanceResult(
+        workflows_affected=workflows_count,
+        runs_affected=runs_count,
+        steps_affected=steps_count,
+        artifacts_affected=artifacts_count,
+        soft_deleted_workflows_included=soft_deleted_workflows,
+    )
+
+    if payload.dry_run:
+        return result
+
+    if run_ids:
+        await session.execute(
+            update(WorkflowRuns)
+            .where(WorkflowRuns.run_id.in_(run_ids))
+            .values(archived=True)
+        )
+    await _write_maintenance_log(
+        session,
+        operation="archive",
+        user_id=user.user_id,
+        scope=payload.scope,
+        group_id=payload.group_id,
+        cutoff=payload.cutoff,
+        counts=result,
+    )
+    await session.commit()
+    return result
