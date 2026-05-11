@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.users import current_active_user
 from backend.db.models import (
+    ApiGroups,
     EmailAutoReplyLog,
     MaintenanceLog,
     PendingEmailReplies,
@@ -71,6 +72,27 @@ class PurgeRequest(BaseModel):
 
 
 PURGE_CONFIRMATION_LITERAL = "PURGE"
+
+
+class MaintenanceLogRead(BaseModel):
+    log_id: int
+    operation: str
+    user_id: int
+    user_name: str | None = None
+    scope: str
+    scope_group_id: int | None = None
+    scope_group_name: str | None = None
+    cutoff: datetime
+    workflows_affected: int
+    runs_affected: int
+    steps_affected: int
+    artifacts_affected: int
+    bytes_freed: int | None = None
+    error_detail: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class MaintenanceResult(BaseModel):
@@ -501,3 +523,58 @@ async def purge_runs(
     )
     await session.commit()
     return result
+
+
+# ── History endpoint (M.5) ──────────────────────────────────
+
+
+@router_maintenance.get(
+    "/admin/maintenance/log", response_model=list[MaintenanceLogRead]
+)
+async def list_maintenance_log(
+    limit: int = 50,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+) -> list[MaintenanceLogRead]:
+    """Return the N most recent maintenance_log rows. Superuser-only.
+
+    Resolves user_name and (for scope='group') group name so the admin
+    page can render a readable history without extra round-trips.
+    """
+    _require_superuser(user)
+    limit = max(1, min(limit, 500))
+
+    rows = await session.execute(
+        select(MaintenanceLog, User.user_name, ApiGroups.group_name)
+        .join(User, User.user_id == MaintenanceLog.user_id, isouter=True)
+        .join(
+            ApiGroups,
+            ApiGroups.group_id == MaintenanceLog.scope_group_id,
+            isouter=True,
+        )
+        .order_by(MaintenanceLog.created_at.desc())
+        .limit(limit)
+    )
+
+    out: list[MaintenanceLogRead] = []
+    for entry, user_name, group_name in rows.all():
+        out.append(
+            MaintenanceLogRead(
+                log_id=entry.log_id,
+                operation=entry.operation,
+                user_id=entry.user_id,
+                user_name=user_name,
+                scope=entry.scope,
+                scope_group_id=entry.scope_group_id,
+                scope_group_name=group_name,
+                cutoff=entry.cutoff,
+                workflows_affected=entry.workflows_affected,
+                runs_affected=entry.runs_affected,
+                steps_affected=entry.steps_affected,
+                artifacts_affected=entry.artifacts_affected,
+                bytes_freed=entry.bytes_freed,
+                error_detail=entry.error_detail,
+                created_at=entry.created_at,
+            )
+        )
+    return out
