@@ -100,6 +100,8 @@ async def download_artifact(
     workflow = await session.get(UserWorkflows, run.workflow_id)
     if not workflow or workflow.group_id != user.group_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    if run.archived and not user.is_superuser:
+        raise HTTPException(status_code=404, detail="Artifact not found")
     workflow_type = await session.get(WorkflowTypes, workflow.type_id)
 
     if not os.path.isfile(artifact.file_path):

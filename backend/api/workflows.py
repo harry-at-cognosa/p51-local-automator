@@ -194,7 +194,9 @@ async def list_workflows(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
-    # DISTINCT ON (workflow_id) latest run per workflow
+    # DISTINCT ON (workflow_id) latest run per workflow. Archived runs are
+    # excluded so a workflow whose only recent runs were archived shows its
+    # most recent VISIBLE run (or none if all are archived).
     latest_runs = (
         select(
             WorkflowRuns.workflow_id,
@@ -202,6 +204,7 @@ async def list_workflows(
             WorkflowRuns.status.label("latest_status"),
             WorkflowRuns.started_at.label("latest_started_at"),
         )
+        .where(WorkflowRuns.archived.is_(False))
         .distinct(WorkflowRuns.workflow_id)
         .order_by(WorkflowRuns.workflow_id, WorkflowRuns.started_at.desc())
         .subquery()
@@ -418,10 +421,15 @@ async def delete_workflow(
 @router_workflows.get("/workflows/{workflow_id}/runs", response_model=list[WorkflowRunRead])
 async def list_runs(
     workflow_id: int,
+    include_archived: bool = False,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
     workflow = await _get_active_workflow(session, workflow_id, user)
+
+    # Archived runs are hidden by default. Superusers can opt in via
+    # ?include_archived=true; non-superusers are silently forced to false.
+    show_archived = include_archived and user.is_superuser
 
     artifact_counts = (
         select(
@@ -432,7 +440,7 @@ async def list_runs(
         .subquery()
     )
 
-    result = await session.execute(
+    stmt = (
         select(WorkflowRuns, artifact_counts.c.artifact_count)
         .join(
             artifact_counts,
@@ -443,6 +451,9 @@ async def list_runs(
         .order_by(WorkflowRuns.started_at.desc())
         .limit(50)
     )
+    if not show_archived:
+        stmt = stmt.where(WorkflowRuns.archived.is_(False))
+    result = await session.execute(stmt)
 
     rows = []
     for run, count in result.all():
@@ -460,6 +471,7 @@ async def list_runs(
                 error_detail=run.error_detail,
                 artifact_count=int(count or 0),
                 config_snapshot=run.config_snapshot,
+                archived=run.archived,
             )
         )
     return rows
@@ -568,6 +580,8 @@ async def get_run(
     workflow = await session.get(UserWorkflows, run.workflow_id)
     if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
         raise HTTPException(status_code=404, detail="Run not found")
+    if run.archived and not user.is_superuser:
+        raise HTTPException(status_code=404, detail="Run not found")
 
     artifact_count = await session.scalar(
         select(func.count(WorkflowArtifacts.artifact_id)).where(WorkflowArtifacts.run_id == run_id)
@@ -588,6 +602,7 @@ async def get_run(
         error_detail=run.error_detail,
         artifact_count=int(artifact_count or 0),
         config_snapshot=run.config_snapshot,
+        archived=run.archived,
         type_id=workflow.type_id,
         config_schema=workflow_type.config_schema if workflow_type else None,
     )
@@ -604,6 +619,8 @@ async def get_run_steps(
         raise HTTPException(status_code=404, detail="Run not found")
     workflow = await session.get(UserWorkflows, run.workflow_id)
     if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.archived and not user.is_superuser:
         raise HTTPException(status_code=404, detail="Run not found")
 
     result = await session.execute(
@@ -623,6 +640,8 @@ async def get_run_artifacts(
         raise HTTPException(status_code=404, detail="Run not found")
     workflow = await session.get(UserWorkflows, run.workflow_id)
     if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.archived and not user.is_superuser:
         raise HTTPException(status_code=404, detail="Run not found")
 
     result = await session.execute(

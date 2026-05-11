@@ -23,7 +23,10 @@ async def get_stats(
     runs_count = await session.scalar(
         select(func.count()).select_from(WorkflowRuns)
         .join(UserWorkflows)
-        .where(UserWorkflows.group_id == user.group_id)
+        .where(
+            UserWorkflows.group_id == user.group_id,
+            WorkflowRuns.archived.is_(False),
+        )
     ) or 0
 
     runs_today = await session.scalar(
@@ -31,6 +34,7 @@ async def get_stats(
         .join(UserWorkflows)
         .where(
             UserWorkflows.group_id == user.group_id,
+            WorkflowRuns.archived.is_(False),
             func.date(WorkflowRuns.started_at) == func.current_date(),
         )
     ) or 0

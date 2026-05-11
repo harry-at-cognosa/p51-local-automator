@@ -230,6 +230,7 @@ class WorkflowRunRead(BaseModel):
     error_detail: str | None
     artifact_count: int = 0
     config_snapshot: dict | None = None
+    archived: bool = False
     type_id: int | None = None         # populated by detail endpoint only
     config_schema: list | None = None  # populated by detail endpoint only
 
