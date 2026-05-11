@@ -54,6 +54,9 @@ export default function SideMenu() {
             <LinkContainer to="/app/admin/settings">
               <Nav.Link>Global Settings</Nav.Link>
             </LinkContainer>
+            <LinkContainer to="/app/admin/maintenance">
+              <Nav.Link>Maintenance</Nav.Link>
+            </LinkContainer>
           </>
         )}
       </Nav>
