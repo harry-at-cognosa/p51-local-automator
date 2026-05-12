@@ -320,11 +320,33 @@ export default function Workflows() {
                 required
               >
                 <option value={0}>Select a type...</option>
-                {types.map((t) => (
-                  <option key={t.type_id} value={t.type_id}>
-                    {t.category.category_id}-{t.category.short_name} — {t.type_id}-{t.long_name}
-                  </option>
-                ))}
+                {/* Group by category. The backend returns types pre-sorted
+                    by (category.sort_order, type.sort_order, type.type_id),
+                    so a linear pass produces correct optgroup boundaries. */}
+                {(() => {
+                  const groups: { categoryId: number; label: string; types: typeof types }[] = [];
+                  for (const t of types) {
+                    const last = groups[groups.length - 1];
+                    if (!last || last.categoryId !== t.category.category_id) {
+                      groups.push({
+                        categoryId: t.category.category_id,
+                        label: `${t.category.category_id}-${t.category.short_name}`,
+                        types: [t],
+                      });
+                    } else {
+                      last.types.push(t);
+                    }
+                  }
+                  return groups.map((g) => (
+                    <optgroup key={g.categoryId} label={g.label}>
+                      {g.types.map((t) => (
+                        <option key={t.type_id} value={t.type_id}>
+                          {t.type_id}-{t.long_name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ));
+                })()}
               </Form.Select>
             </Form.Group>
             <Form.Group className="mb-3">
