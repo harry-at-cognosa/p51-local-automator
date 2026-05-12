@@ -1,11 +1,9 @@
 import { Nav } from "react-bootstrap";
 import { LinkContainer } from "react-router-bootstrap";
 import { useAuthStore } from "../stores/useAuthStore";
-import { useSettingsStore } from "../stores/useSettingsStore";
 
 export default function SideMenu() {
   const auth = useAuthStore();
-  const { sw_version, db_version } = useSettingsStore();
 
   return (
     <div
@@ -60,13 +58,6 @@ export default function SideMenu() {
           </>
         )}
       </Nav>
-
-      {(sw_version || db_version) && (
-        <div className="text-muted mt-3 pt-2 border-top" style={{ fontSize: "0.75em" }}>
-          {sw_version && <div>app {sw_version}</div>}
-          {db_version && <div>db {db_version}</div>}
-        </div>
-      )}
     </div>
   );
 }
