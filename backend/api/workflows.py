@@ -6,6 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.api.dashboard import _run_scope_filter
 from backend.db.session import async_get_session, SqlAsyncSession
 from backend.db.models import (
     EmailAutoReplyLog,
@@ -249,8 +250,8 @@ async def list_workflows(
         .options(
             selectinload(UserWorkflows.workflow_type).selectinload(WorkflowTypes.category)
         )
-        .where(UserWorkflows.group_id == user.group_id)
         .where(UserWorkflows.deleted == 0)
+        .where(*_run_scope_filter(user))
         .order_by(UserWorkflows.created_at.desc())
     )
 
