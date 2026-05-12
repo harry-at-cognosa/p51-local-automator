@@ -24,6 +24,12 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      // Static landing-page assets are mounted at /landing/images on the
+      // backend; the Dashboard's header strip <img> tags resolve to them.
+      "/landing": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
 });
