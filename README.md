@@ -29,7 +29,7 @@ No cloud proxies, no third-party middleware. The platform connects directly to A
 
 - macOS (tested on macOS 15 / Sequoia)
 - Python 3.12+
-- Node.js 18+
+- Node.js — pinned to the version in `frontend/.nvmrc` (currently **25.4.0**); manage with [`nvm`](https://github.com/nvm-sh/nvm) so multiple machines produce identical `package-lock.json` files
 - PostgreSQL 14+
 - Anthropic API key
 - Apple Mail and/or Calendar configured with accounts to monitor
@@ -37,6 +37,10 @@ No cloud proxies, no third-party middleware. The platform connects directly to A
 ## Setup
 
 ```bash
+# Install nvm if you don't have it (one-time per machine)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+# Then either restart your terminal or `source ~/.zshrc`
+
 # Clone
 git clone https://github.com/harry-at-cognosa/p51-local-automator.git
 cd p51-local-automator
@@ -60,6 +64,8 @@ alembic upgrade head
 
 # Frontend
 cd frontend
+nvm use         # reads .nvmrc, switches this shell to the pinned Node version
+                # (run `nvm install` first if nvm reports the version isn't installed)
 npm install
 npm run build
 cd ..
