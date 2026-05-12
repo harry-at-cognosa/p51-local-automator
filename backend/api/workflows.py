@@ -103,11 +103,20 @@ async def list_workflow_types(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
+    # Cluster by category (sort_order, then category_id as a tie-break),
+    # then types within that cluster (sort_order, then type_id). Feeds the
+    # Dashboard card grid and the Create-workflow dropdown the same shape.
     result = await session.execute(
         select(WorkflowTypes)
+        .join(WorkflowCategories)
         .options(selectinload(WorkflowTypes.category))
         .where(WorkflowTypes.enabled == True)
-        .order_by(WorkflowTypes.type_id)
+        .order_by(
+            WorkflowCategories.sort_order,
+            WorkflowCategories.category_id,
+            WorkflowTypes.sort_order,
+            WorkflowTypes.type_id,
+        )
     )
     return result.scalars().all()
 
