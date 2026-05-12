@@ -1,7 +1,7 @@
 # Workflow Types 2 & 4 — End-to-End Certification
 
 **Date:** 2026-04-26
-**Scope:** Track A of the roadmap review in `p51_local_automator_260426_sttus_and_plans.md`. Both types had complete engines (`backend/services/workflows/data_analyzer.py`, `sql_runner.py`) and dispatch wiring but had not been driven against real data.
+**Scope:** Track A of the roadmap review in `p51-local-automator_260426_sttus_and_plans.md`. Both types had complete engines (`backend/services/workflows/data_analyzer.py`, `sql_runner.py`) and dispatch wiring but had not been driven against real data.
 
 ## Verdict
 

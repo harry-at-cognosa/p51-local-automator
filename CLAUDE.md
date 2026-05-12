@@ -52,7 +52,7 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 
 ```bash
 # Backend
-cd p51_local_automator
+cd p51-local-automator
 pip install -r backend/requirements.txt
 createdb p51_automator
 alembic upgrade head

@@ -1,7 +1,7 @@
 # Deployment Topology Notes
 
 **Date:** 2026-04-22
-**Context:** Clarifying where application components live across the two deployment modes p51_local_automator is designed for: desktop (everything on one box) and SOHO (small office, Mac Mini as the shared server).
+**Context:** Clarifying where application components live across the two deployment modes p51-local-automator is designed for: desktop (everything on one box) and SOHO (small office, Mac Mini as the shared server).
 
 ## The two deployment modes
 

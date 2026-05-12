@@ -1,7 +1,7 @@
 # Gmail / Google Workspace setup guide
 
 This is the one-time setup an instance administrator does to enable Gmail
-integration on a deployed p51_local_automator. Each customer registers
+integration on a deployed p51-local-automator. Each customer registers
 their own GCP project — Cognosa does not operate a shared GCP project.
 
 This is a draft. Harry will polish it on his first walk-through of his

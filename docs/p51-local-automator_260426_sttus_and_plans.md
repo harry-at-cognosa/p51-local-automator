@@ -1,7 +1,7 @@
 
-**p51_local_automator_260426_sttus_and_plans.md**
+**p51-local-automator_260426_sttus_and_plans.md**
 
-# overview of p51_local_automator
+# overview of p51-local-automator
 
 ## workflow categories so far
 

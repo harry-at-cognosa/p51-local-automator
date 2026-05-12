@@ -1,7 +1,7 @@
 # Watchdogs and VDB / LLM Polling in cognosa_web_app
 
 **Date:** 2026-04-23
-**Purpose:** Explain the watchdog pattern used in `~/cognosa_web_app`, how it tracks multiple `run_tasks.py` processes, and how the related-but-distinct Vector DB and LLM availability polling fits into the same module. Written as reference for p51_local_automator — none of this is in p51 today, but the patterns would port cleanly if/when we add out-of-process workers or external-service health monitoring.
+**Purpose:** Explain the watchdog pattern used in `~/cognosa_web_app`, how it tracks multiple `run_tasks.py` processes, and how the related-but-distinct Vector DB and LLM availability polling fits into the same module. Written as reference for p51-local-automator — none of this is in p51 today, but the patterns would port cleanly if/when we add out-of-process workers or external-service health monitoring.
 
 ---
 
@@ -146,7 +146,7 @@ So the superuser page is effectively "one screen to see whether everything is al
 
 ---
 
-## How this would port to p51_local_automator
+## How this would port to p51-local-automator
 
 Today p51 doesn't need any of this because:
 
