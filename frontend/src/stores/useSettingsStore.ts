@@ -5,6 +5,7 @@ import getColor from "../api/getColor";
 interface SettingsState {
   app_title: string;
   navbar_color: string;
+  trim_color: string;
   instance_label: string;
   sw_version: string;
   db_version: string;
@@ -23,6 +24,7 @@ function applyThemeColors(colorName: string) {
 export const useSettingsStore = create<SettingsState>((set) => ({
   app_title: "Local Automator",
   navbar_color: "slate",
+  trim_color: "",
   instance_label: "DEV",
   sw_version: "",
   db_version: "",
@@ -37,6 +39,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         set({
           app_title: data.app_title || "Local Automator",
           navbar_color: color,
+          trim_color: data.trim_color || "",
           instance_label: data.instance_label || "",
           sw_version: data.sw_version || "",
           db_version: data.db_version || "",
@@ -49,3 +52,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     }
   },
 }));
+
+/** Resolve the color to use for section trim borders on the Dashboard
+ * (and anywhere else that wants the "trim" treatment). Returns a hex
+ * string from the shade-500 stop of `trim_color` if configured, else
+ * `navbar_color` shade-500 as a fallback. */
+export function getTrimColor(state: SettingsState): string {
+  return getColor(state.trim_color || state.navbar_color || "slate", 500);
+}

@@ -39,7 +39,7 @@ export default function Settings() {
     await axiosClient.put(`/settings/${editingName}`, { value: editValue });
     setEditingName(null);
     fetchSettings();
-    if (["navbar_color", "app_title", "instance_label"].includes(editingName)) {
+    if (["navbar_color", "trim_color", "app_title", "instance_label"].includes(editingName)) {
       refreshTheme();
     }
   };
@@ -60,7 +60,11 @@ export default function Settings() {
   };
 
   const renderEditControl = (name: string) => {
-    if (name === "navbar_color") {
+    if (name === "navbar_color" || name === "trim_color") {
+      // Both colors use the same picker shape; trim_color previews only
+      // at shade 500 (the shade it renders at), navbar_color shows the
+      // 300/500/700 band so users can see the full theme arc.
+      const previewShades = name === "trim_color" ? [500] : [300, 500, 700];
       return (
         <div className="d-flex gap-2 align-items-center">
           <Form.Select
@@ -74,11 +78,15 @@ export default function Settings() {
             ))}
           </Form.Select>
           <div className="d-flex gap-1">
-            {[300, 500, 700].map((shade) => (
+            {previewShades.map((shade) => (
               <span
                 key={shade}
                 className="d-inline-block rounded"
-                style={{ width: 20, height: 20, backgroundColor: getColor(editValue, shade) }}
+                style={{
+                  width: name === "trim_color" ? 32 : 20,
+                  height: name === "trim_color" ? 32 : 20,
+                  backgroundColor: getColor(editValue, shade),
+                }}
               />
             ))}
           </div>
@@ -113,7 +121,7 @@ export default function Settings() {
   };
 
   const renderValue = (s: Setting) => {
-    if (s.name === "navbar_color") {
+    if (s.name === "navbar_color" || s.name === "trim_color") {
       return (
         <span className="d-flex align-items-center gap-2">
           {s.value}
