@@ -17,6 +17,7 @@ from backend.api.files import router_files
 from backend.api.gmail_oauth import router_gmail_oauth
 from backend.api.google_calendar import router_google_calendar
 from backend.api.maintenance import router_maintenance
+from backend.api.system import router_system
 
 api_router = APIRouter(prefix=API_URL_PREFIX)
 
@@ -42,3 +43,4 @@ api_router.include_router(router_files, tags=["Files"])
 api_router.include_router(router_gmail_oauth, tags=["Gmail"])
 api_router.include_router(router_google_calendar, tags=["Google Calendar"])
 api_router.include_router(router_maintenance, tags=["Maintenance"])
+api_router.include_router(router_system, tags=["System"])

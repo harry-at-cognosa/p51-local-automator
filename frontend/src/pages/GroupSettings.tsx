@@ -14,6 +14,15 @@ interface GroupSummary {
   is_active: boolean;
 }
 
+interface PathValidateResponse {
+  ok: boolean;
+  path: string;
+  reason: string;
+  exists: boolean;
+  is_dir: boolean;
+  writable: boolean;
+}
+
 export default function GroupSettings() {
   const [settings, setSettings] = useState<GroupSetting[]>([]);
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -22,6 +31,8 @@ export default function GroupSettings() {
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [pathTest, setPathTest] = useState<PathValidateResponse | null>(null);
+  const [pathTesting, setPathTesting] = useState(false);
   const { group_id, group_name, is_superuser } = useAuthStore();
 
   // For superusers: list of all groups + currently-selected target.
@@ -50,12 +61,32 @@ export default function GroupSettings() {
   const startEdit = (s: GroupSetting) => {
     setEditingName(s.name);
     setEditValue(s.value);
+    setPathTest(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingName(null);
+    setPathTest(null);
+  };
+
+  const testPath = async () => {
+    setPathTesting(true);
+    try {
+      const res = await axiosClient.post<PathValidateResponse>(
+        "/settings/validate-path",
+        { path: editValue },
+      );
+      setPathTest(res.data);
+    } finally {
+      setPathTesting(false);
+    }
   };
 
   const saveEdit = async () => {
     if (!editingName) return;
     await axiosClient.put(`/group-settings/${editingName}${groupQuery}`, { value: editValue });
     setEditingName(null);
+    setPathTest(null);
     fetchSettings();
   };
 
@@ -156,17 +187,42 @@ export default function GroupSettings() {
                 <td className="fw-bold font-monospace">{s.name}</td>
                 <td>
                   {editingName === s.name ? (
-                    <div className="d-flex gap-2">
-                      <Form.Control
-                        size="sm"
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        autoFocus
-                        onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingName(null); }}
-                      />
-                      <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
-                      <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>Cancel</Button>
-                    </div>
+                    s.name === "file_system_root" ? (
+                      <div>
+                        <div className="d-flex gap-2">
+                          <Form.Control
+                            size="sm"
+                            value={editValue}
+                            onChange={(e) => { setEditValue(e.target.value); setPathTest(null); }}
+                            autoFocus
+                            onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+                            placeholder="/absolute/path/to/data/root"
+                          />
+                          <Button size="sm" variant="outline-secondary" onClick={testPath} disabled={pathTesting || !editValue.trim()}>
+                            {pathTesting ? "Testing…" : "Test"}
+                          </Button>
+                          <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
+                          <Button size="sm" variant="secondary" onClick={cancelEdit}>Cancel</Button>
+                        </div>
+                        {pathTest && (
+                          <div className={`small mt-1 ${pathTest.ok ? "text-success" : "text-warning"}`}>
+                            <strong>{pathTest.ok ? "OK:" : "Problem:"}</strong> {pathTest.reason}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="d-flex gap-2">
+                        <Form.Control
+                          size="sm"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          autoFocus
+                          onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+                        />
+                        <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
+                        <Button size="sm" variant="secondary" onClick={cancelEdit}>Cancel</Button>
+                      </div>
+                    )
                   ) : renderValue(s)}
                 </td>
                 <td>

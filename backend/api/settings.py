@@ -6,12 +6,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.session import async_get_session
 from backend.db.models import User, ApiSettings
 from backend.auth.users import current_active_user
+from backend.services.path_validator import validate_root_path
 
 router_settings = APIRouter(prefix="/settings")
 
 
 class SettingUpdate(BaseModel):
     value: str
+
+
+class PathValidateRequest(BaseModel):
+    path: str
+
+
+class PathValidateResponse(BaseModel):
+    ok: bool
+    path: str
+    reason: str
+    exists: bool
+    is_dir: bool
+    writable: bool
 
 
 @router_settings.get("")
@@ -58,6 +72,30 @@ async def delete_setting(
     await session.delete(setting)
     await session.commit()
     return {"detail": f"Setting '{name}' deleted"}
+
+
+@router_settings.post("/validate-path", response_model=PathValidateResponse)
+async def validate_path(
+    payload: PathValidateRequest,
+    user: User = Depends(current_active_user),
+):
+    """Probe a filesystem path for the Settings UI Test button.
+
+    Allowed to groupadmin+ (groupadmins need to test their group's
+    file_system_root before saving). The probe writes and removes a
+    tempfile to verify true writability.
+    """
+    if not (user.is_groupadmin or user.is_superuser):
+        raise HTTPException(status_code=403, detail="Group admin or superuser required")
+    result = validate_root_path(payload.path)
+    return PathValidateResponse(
+        ok=result.ok,
+        path=result.path,
+        reason=result.reason,
+        exists=result.exists,
+        is_dir=result.is_dir,
+        writable=result.writable,
+    )
 
 
 @router_settings.get("/webapp_options")

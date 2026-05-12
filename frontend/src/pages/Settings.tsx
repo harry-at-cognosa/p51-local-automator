@@ -14,6 +14,15 @@ interface Setting {
   value: string;
 }
 
+interface PathValidateResponse {
+  ok: boolean;
+  path: string;
+  reason: string;
+  exists: boolean;
+  is_dir: boolean;
+  writable: boolean;
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<Setting[]>([]);
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -21,6 +30,8 @@ export default function Settings() {
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
+  const [pathTest, setPathTest] = useState<PathValidateResponse | null>(null);
+  const [pathTesting, setPathTesting] = useState(false);
   const { fetchSettings: refreshTheme } = useSettingsStore();
 
   const fetchSettings = () => {
@@ -32,12 +43,32 @@ export default function Settings() {
   const startEdit = (s: Setting) => {
     setEditingName(s.name);
     setEditValue(s.value);
+    setPathTest(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingName(null);
+    setPathTest(null);
+  };
+
+  const testPath = async () => {
+    setPathTesting(true);
+    try {
+      const res = await axiosClient.post<PathValidateResponse>(
+        "/settings/validate-path",
+        { path: editValue },
+      );
+      setPathTest(res.data);
+    } finally {
+      setPathTesting(false);
+    }
   };
 
   const saveEdit = async () => {
     if (!editingName) return;
     await axiosClient.put(`/settings/${editingName}`, { value: editValue });
     setEditingName(null);
+    setPathTest(null);
     fetchSettings();
     if (["navbar_color", "trim_color", "app_title", "instance_label"].includes(editingName)) {
       refreshTheme();
@@ -60,6 +91,32 @@ export default function Settings() {
   };
 
   const renderEditControl = (name: string) => {
+    if (name === "file_system_root") {
+      return (
+        <div>
+          <div className="d-flex gap-2">
+            <Form.Control
+              size="sm"
+              value={editValue}
+              onChange={(e) => { setEditValue(e.target.value); setPathTest(null); }}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+              placeholder="/absolute/path/to/data/root"
+            />
+            <Button size="sm" variant="outline-secondary" onClick={testPath} disabled={pathTesting || !editValue.trim()}>
+              {pathTesting ? "Testing…" : "Test"}
+            </Button>
+            <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
+            <Button size="sm" variant="secondary" onClick={cancelEdit}>Cancel</Button>
+          </div>
+          {pathTest && (
+            <div className={`small mt-1 ${pathTest.ok ? "text-success" : "text-warning"}`}>
+              <strong>{pathTest.ok ? "OK:" : "Problem:"}</strong> {pathTest.reason}
+            </div>
+          )}
+        </div>
+      );
+    }
     if (name === "navbar_color" || name === "trim_color") {
       // Both colors use the same picker shape; trim_color previews only
       // at shade 500 (the shade it renders at), navbar_color shows the
@@ -91,7 +148,7 @@ export default function Settings() {
             ))}
           </div>
           <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
-          <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>Cancel</Button>
+          <Button size="sm" variant="secondary" onClick={cancelEdit}>Cancel</Button>
         </div>
       );
     }
@@ -102,10 +159,10 @@ export default function Settings() {
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           autoFocus
-          onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingName(null); }}
+          onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
         />
         <Button size="sm" variant="success" onClick={saveEdit}>Save</Button>
-        <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>Cancel</Button>
+        <Button size="sm" variant="secondary" onClick={cancelEdit}>Cancel</Button>
       </div>
     );
   };

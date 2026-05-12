@@ -21,12 +21,22 @@ from backend.db.models import (
     WorkflowSteps,
 )
 from backend.services.logger_service import get_logger
+from backend.services.path_validator import validate_root_path
 
 log = get_logger("workflow_engine")
 
 
 SETTING_FILE_SYSTEM_ROOT = "file_system_root"
 SETTING_TOKEN_BUDGET = "token_budget"
+
+
+class FileSystemRootError(RuntimeError):
+    """Raised when file_system_root is misconfigured or unwritable.
+
+    The workflow engine's per-type try/except wraps every run body and
+    calls fail_run(str(e)), so this surfaces as a visible failed run
+    with a clear message instead of a silent write to a wrong tree.
+    """
 
 
 async def resolve_int_setting(
@@ -90,10 +100,26 @@ async def _resolve_file_system_root(session: AsyncSession, group_id: int) -> str
     if global_value:
         return global_value
 
-    raise RuntimeError(
+    raise FileSystemRootError(
         f"file_system_root is not configured for group {group_id}; "
         "set group_settings or api_settings 'file_system_root'"
     )
+
+
+async def _resolve_and_validate_root(session: AsyncSession, group_id: int) -> str:
+    """Resolve file_system_root and verify it's a writable directory.
+
+    Raises FileSystemRootError on any failure (missing config, missing
+    path, not a directory, not writable). Returning means it's safe to
+    create subdirectories under the path.
+    """
+    root = await _resolve_file_system_root(session, group_id)
+    result = validate_root_path(root)
+    if not result.ok:
+        raise FileSystemRootError(
+            f"file_system_root is invalid for group {group_id}: {result.reason}"
+        )
+    return result.path
 
 
 async def get_run_output_dir(
@@ -107,7 +133,7 @@ async def get_run_output_dir(
 
     Path layout: <file_system_root>/{group_id}/{user_id}/{workflow_id}/{run_id}/
     """
-    root = await _resolve_file_system_root(session, group_id)
+    root = await _resolve_and_validate_root(session, group_id)
     path = os.path.join(root, str(group_id), str(user_id), str(workflow_id), str(run_id))
     os.makedirs(path, exist_ok=True)
     return path
@@ -126,7 +152,7 @@ async def get_workflow_inputs_dir(
     Inputs are colocated under the workflow (not per-run) since users typically
     reuse the same inputs across runs of the same workflow.
     """
-    root = await _resolve_file_system_root(session, group_id)
+    root = await _resolve_and_validate_root(session, group_id)
     path = os.path.join(root, str(group_id), str(user_id), str(workflow_id), "inputs")
     os.makedirs(path, exist_ok=True)
     return path
@@ -145,7 +171,7 @@ async def get_user_inputs_dir(
     for input pickers; use get_workflow_inputs_dir() when a workflow needs its
     own private inputs space (e.g., per-workflow processed-files ledgers).
     """
-    root = await _resolve_file_system_root(session, group_id)
+    root = await _resolve_and_validate_root(session, group_id)
     path = os.path.join(root, str(group_id), str(user_id), "inputs")
     os.makedirs(path, exist_ok=True)
     return path

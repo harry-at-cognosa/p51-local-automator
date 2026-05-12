@@ -11,10 +11,11 @@
  * navbar_color shade 500 if `trim_color` setting isn't configured.
  */
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Container, Row, Col, Card, Table } from "react-bootstrap";
+import { useNavigate, Link } from "react-router-dom";
+import { Container, Row, Col, Card, Table, Alert } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import { useSettingsStore, getTrimColor } from "../stores/useSettingsStore";
+import { useAuthStore } from "../stores/useAuthStore";
 import WorkflowTypeCardsGrid from "../components/WorkflowTypeCardsGrid";
 import StatusBadge from "../components/StatusBadge";
 
@@ -37,20 +38,34 @@ interface RecentRun {
   started_at: string;
 }
 
+interface HealthResponse {
+  file_system_root: {
+    ok: boolean;
+    reason: string;
+    path: string;
+  };
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentRuns, setRecentRuns] = useState<RecentRun[] | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const settings = useSettingsStore();
   const { app_title, sw_version, db_version } = settings;
+  const { is_groupadmin, is_superuser } = useAuthStore();
   const trimColor = getTrimColor(settings);
+  const showHealthBanner = is_groupadmin || is_superuser;
 
   useEffect(() => {
     axiosClient.get<DashboardStats>("/dashboard/stats").then((res) => setStats(res.data));
     axiosClient
       .get<RecentRun[]>("/dashboard/recent-runs", { params: { limit: 3 } })
       .then((res) => setRecentRuns(res.data));
-  }, []);
+    if (showHealthBanner) {
+      axiosClient.get<HealthResponse>("/system/health").then((res) => setHealth(res.data));
+    }
+  }, [showHealthBanner]);
 
   // Shared style for trimmed sections.
   const trimStyle: React.CSSProperties = {
@@ -61,8 +76,20 @@ export default function Dashboard() {
 
   const versionString = [sw_version, db_version].filter(Boolean).join(" | ");
 
+  const fsRoot = health?.file_system_root;
+  const settingsLink = is_superuser ? "/app/settings" : "/app/group-settings";
+
   return (
     <Container fluid className="p-4">
+      {showHealthBanner && fsRoot && !fsRoot.ok && (
+        <Alert variant="warning" className="mb-3">
+          <Alert.Heading className="h6 mb-1">file_system_root is misconfigured</Alert.Heading>
+          <div className="small mb-1">{fsRoot.reason}</div>
+          <div className="small">
+            Workflow runs will fail until this is fixed. <Link to={settingsLink}>Fix in Settings →</Link>
+          </div>
+        </Alert>
+      )}
       {/* Section 1 — Header strip */}
       <div style={{ ...trimStyle, marginBottom: "1rem" }}>
         <Row className="align-items-center g-3">
