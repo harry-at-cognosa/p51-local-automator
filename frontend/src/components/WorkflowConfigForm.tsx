@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Form, Row, Col, Badge } from "react-bootstrap";
+import { Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
 import SchemaConfigForm, { type FieldDescriptor } from "./SchemaConfigForm";
+import FilePicker, { type FilePickerSelection } from "./FilePicker";
 import axiosClient from "../api/axiosClient";
 
 interface Props {
@@ -44,70 +45,10 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
     return <Type1EmailMonitorForm config={config} onChange={onChange} set={set} />;
   }
 
-  // Transaction Data Analyzer
+  // Transaction Data Analyzer — extracted to a subcomponent so the
+  // FilePicker modal can own its show/hide state via hooks.
   if (typeId === 2) {
-    return (
-      <Row className="g-3">
-        <Col md={12}>
-          <Form.Group>
-            <Form.Label>Data File Path</Form.Label>
-            <Form.Control
-              placeholder="/path/to/data.csv or .xlsx"
-              value={(config.file_path as string) || ""}
-              onChange={(e) => set("file_path", e.target.value)}
-            />
-            <Form.Text className="text-muted">Full path to CSV or Excel file on the server</Form.Text>
-          </Form.Group>
-        </Col>
-        <Col md={4}>
-          <Form.Group>
-            <Form.Label>Start Date</Form.Label>
-            <Form.Control
-              type="date"
-              value={(config.start_date as string) || ""}
-              onChange={(e) => set("start_date", e.target.value)}
-            />
-          </Form.Group>
-        </Col>
-        <Col md={4}>
-          <Form.Group>
-            <Form.Label>End Date</Form.Label>
-            <Form.Control
-              type="date"
-              value={(config.end_date as string) || ""}
-              onChange={(e) => set("end_date", e.target.value)}
-            />
-          </Form.Group>
-        </Col>
-        <Col md={4}>
-          <Form.Group>
-            <Form.Label>Output Format</Form.Label>
-            <Form.Select
-              value={(config.output_format as string) || "xlsx"}
-              onChange={(e) => set("output_format", e.target.value)}
-            >
-              <option value="xlsx">Excel (.xlsx)</option>
-              <option value="csv">CSV</option>
-            </Form.Select>
-          </Form.Group>
-        </Col>
-        <Col md={12}>
-          <Form.Group>
-            <Form.Label>
-              Key Fields <span className="text-muted fw-normal">(optional, AI decides if blank)</span>
-            </Form.Label>
-            <Form.Control
-              placeholder="date, amount, category, vendor"
-              value={((config.key_fields as string[]) || []).join(", ")}
-              onChange={(e) => {
-                const val = e.target.value;
-                set("key_fields", val ? val.split(",").map((t) => t.trim()).filter(Boolean) : []);
-              }}
-            />
-          </Form.Group>
-        </Col>
-      </Row>
-    );
+    return <Type2DataAnalyzerForm config={config} onChange={onChange} set={set} />;
   }
 
   // Calendar Digest — apple_calendar (existing) or google_calendar (Track GC).
@@ -744,6 +685,119 @@ function Type3CalendarDigestForm({ config, onChange, set }: Type3Props) {
           </Col>
         </>
       )}
+    </Row>
+  );
+}
+
+
+interface Type2Props {
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+  set: (key: string, value: unknown) => void;
+}
+
+function Type2DataAnalyzerForm({ config, set }: Type2Props) {
+  const [showPicker, setShowPicker] = useState(false);
+
+  // Tolerate three shapes for config.file_path:
+  //   { path, name }  — current shape after T2S
+  //   string          — legacy rows that predate T2S (migration in T2S.3)
+  //   undefined       — fresh workflow
+  const fp = config.file_path;
+  let display = "No file selected";
+  if (fp && typeof fp === "object" && "path" in fp) {
+    const sel = fp as FilePickerSelection;
+    display = sel.name || sel.path;
+  } else if (typeof fp === "string" && fp.trim()) {
+    display = fp;
+  }
+
+  const onSelect = (selection: FilePickerSelection) => {
+    set("file_path", selection);
+    setShowPicker(false);
+  };
+
+  return (
+    <Row className="g-3">
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Data File</Form.Label>
+          <InputGroup>
+            <Form.Control readOnly value={display} />
+            <Button variant="outline-secondary" onClick={() => setShowPicker(true)}>
+              Pick file
+            </Button>
+            {fp && (
+              <Button
+                variant="outline-secondary"
+                onClick={() => set("file_path", null)}
+              >
+                Clear
+              </Button>
+            )}
+          </InputGroup>
+          <Form.Text className="text-muted">
+            Pick from your inputs sandbox at
+            {" "}
+            <code>&lt;file_system_root&gt;/&#123;group_id&#125;/&#123;user_id&#125;/inputs/</code>.
+            To add new files, drop them in via SMB or the local filesystem.
+          </Form.Text>
+        </Form.Group>
+        <FilePicker
+          show={showPicker}
+          mode="file"
+          filterExtensions={[".csv", ".xlsx"]}
+          onSelect={onSelect}
+          onCancel={() => setShowPicker(false)}
+        />
+      </Col>
+      <Col md={4}>
+        <Form.Group>
+          <Form.Label>Start Date</Form.Label>
+          <Form.Control
+            type="date"
+            value={(config.start_date as string) || ""}
+            onChange={(e) => set("start_date", e.target.value)}
+          />
+        </Form.Group>
+      </Col>
+      <Col md={4}>
+        <Form.Group>
+          <Form.Label>End Date</Form.Label>
+          <Form.Control
+            type="date"
+            value={(config.end_date as string) || ""}
+            onChange={(e) => set("end_date", e.target.value)}
+          />
+        </Form.Group>
+      </Col>
+      <Col md={4}>
+        <Form.Group>
+          <Form.Label>Output Format</Form.Label>
+          <Form.Select
+            value={(config.output_format as string) || "xlsx"}
+            onChange={(e) => set("output_format", e.target.value)}
+          >
+            <option value="xlsx">Excel (.xlsx)</option>
+            <option value="csv">CSV</option>
+          </Form.Select>
+        </Form.Group>
+      </Col>
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>
+            Key Fields <span className="text-muted fw-normal">(optional, AI decides if blank)</span>
+          </Form.Label>
+          <Form.Control
+            placeholder="date, amount, category, vendor"
+            value={((config.key_fields as string[]) || []).join(", ")}
+            onChange={(e) => {
+              const val = e.target.value;
+              set("key_fields", val ? val.split(",").map((t) => t.trim()).filter(Boolean) : []);
+            }}
+          />
+        </Form.Group>
+      </Col>
     </Row>
   );
 }
