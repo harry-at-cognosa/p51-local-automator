@@ -34,6 +34,7 @@ Running list of decisions, enhancements, and ideas captured during architecture 
 - **TS / Python type sharing** — frontend types are hand-written per page. Generate from FastAPI OpenAPI schema, or accept manual sync.
 - **Conversations tables** (conversations, conversation_messages) — defined but unused. Keep for future chat layer or drop.
 - ~~**Stop calling seed.py on startup**~~ — **shipped 2026-05-05** in Phase 1 (commit `phase 1.5`). `run_seed` now skips when workflow_types is non-empty. Future workflow_type/category changes go through Alembic data migrations rather than seed edits.
+- ~~**Type 2 file_path sandboxing (align with Type 7)**~~ — **shipped 2026-05-11** in commits `phase T2S.1` through `phase T2S.3`. Type 2's `config.file_path` is now resolved under `<file_system_root>/{group_id}/{user_id}/inputs/` with the same traversal guard `AgenticEngine.stage_ingest` uses. Frontend swaps the free-text Form.Control for the existing FilePicker (saved shape: `{path, name}`). Backend tolerates legacy bare strings for non-migrated rows. `scripts/migrate_type2_file_paths.py` reclassifies pre-T2S rows; rows with absolute paths outside any inputs root are flagged for manual fix-up rather than auto-rewritten.
 
 ## Admin
 
