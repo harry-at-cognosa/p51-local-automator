@@ -5,7 +5,11 @@ Steps:
 2. Summarize findings with LLM (consumes the script's markdown reports)
 
 Config (from user_workflows.config):
-    file_path: str - Path to CSV or Excel file
+    file_path: str | {path, name} - CSV/XLSX relative to the user's inputs
+        sandbox at <file_system_root>/{group_id}/{user_id}/inputs/. Absolute
+        paths are rejected. The {path, name} dict shape matches what the
+        frontend FilePicker emits; bare strings are tolerated for legacy
+        rows that predate T2S.
     start_date: str - Optional start date filter
     end_date: str - Optional end date filter
     days: int - Optional days filter
@@ -48,6 +52,17 @@ def _read_text_safe(path: str, max_chars: int = 8000) -> str:
         return ""
 
 
+def _extract_relative_file_path(raw) -> str:
+    """Accept either the legacy bare-string shape or the FilePicker
+    {path, name} dict shape and return the relative path string. Empty
+    string when missing or malformed (caller checks)."""
+    if isinstance(raw, dict):
+        return (raw.get("path") or "").strip()
+    if isinstance(raw, str):
+        return raw.strip()
+    return ""
+
+
 async def run_data_analyzer(
     session: AsyncSession,
     workflow: UserWorkflows,
@@ -55,14 +70,32 @@ async def run_data_analyzer(
 ) -> WorkflowRuns:
     """Execute the data analysis pipeline."""
     config = workflow.config or {}
-    file_path = config.get("file_path", "")
-    if not file_path:
+    rel = _extract_relative_file_path(config.get("file_path"))
+    if not rel:
         run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
         await engine.fail_run(session, run, "Missing 'file_path' in workflow config")
         return run
-    if not os.path.exists(file_path):
+    if os.path.isabs(rel):
         run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
-        await engine.fail_run(session, run, f"Data file not found: {file_path}")
+        await engine.fail_run(
+            session,
+            run,
+            "Absolute paths are not allowed; pick a file from your inputs sandbox",
+        )
+        return run
+
+    inputs_dir = await engine.get_user_inputs_dir(
+        session, workflow.group_id, workflow.user_id
+    )
+    abs_path = os.path.normpath(os.path.join(inputs_dir, rel))
+    inputs_root_norm = os.path.normpath(inputs_dir)
+    if not abs_path.startswith(inputs_root_norm + os.sep) and abs_path != inputs_root_norm:
+        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
+        await engine.fail_run(session, run, f"Path {rel!r} escapes the user's inputs sandbox")
+        return run
+    if not os.path.exists(abs_path):
+        run = await engine.create_run(session, workflow.workflow_id, total_steps=1, trigger=trigger, config=workflow.config)
+        await engine.fail_run(session, run, f"Data file not found: {rel}")
         return run
 
     run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
@@ -73,7 +106,7 @@ async def run_data_analyzer(
         step1 = await engine.start_step(session, run.run_id, 1, "Analyze data")
 
         script = os.path.join(SCRIPTS_DIR, "analyze_data.py")
-        cmd = ["python3", script, file_path, "--output-dir", output_dir]
+        cmd = ["python3", script, abs_path, "--output-dir", output_dir]
 
         if config.get("start_date"):
             cmd.extend(["--start", config["start_date"]])
