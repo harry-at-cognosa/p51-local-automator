@@ -727,7 +727,7 @@ function Type2DataAnalyzerForm({ config, set }: Type2Props) {
             <Button variant="outline-secondary" onClick={() => setShowPicker(true)}>
               Pick file
             </Button>
-            {fp && (
+            {!!fp && (
               <Button
                 variant="outline-secondary"
                 onClick={() => set("file_path", null)}
