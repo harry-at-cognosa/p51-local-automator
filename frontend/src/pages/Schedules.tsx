@@ -27,6 +27,27 @@ interface ScheduleListItem {
   next_fires_utc: string[];
   last_run_at: string | null;
   last_run_id: number | null;
+  latest_run_status: string | null;
+}
+
+function statusBadge(item: ScheduleListItem): { label: string; variant: string } {
+  if (item.latest_run_status === "running") return { label: "Running", variant: "info" };
+  if (item.enabled) return { label: "Active", variant: "success" };
+
+  const kind = item.schedule.kind as string | undefined;
+  if (kind === "one_time" && item.last_run_id != null) {
+    if (item.latest_run_status === "completed") return { label: "Completed", variant: "success" };
+    if (item.latest_run_status === "failed") return { label: "Failed", variant: "danger" };
+    return { label: "Done", variant: "secondary" };
+  }
+  if (kind === "recurring") {
+    const endsOn = item.schedule.ends_on as string | undefined;
+    if (endsOn) {
+      const todayLocalIso = new Date().toISOString().slice(0, 10);
+      if (endsOn < todayLocalIso) return { label: "Expired", variant: "warning" };
+    }
+  }
+  return { label: "Paused", variant: "secondary" };
 }
 
 interface WorkflowSummary {
@@ -184,9 +205,10 @@ export default function Schedules() {
                 </td>
                 <td className="small text-muted">{item.user_email}</td>
                 <td>
-                  {item.enabled
-                    ? <span className="badge bg-success">Active</span>
-                    : <span className="badge bg-secondary">Paused</span>}
+                  {(() => {
+                    const b = statusBadge(item);
+                    return <span className={`badge bg-${b.variant}`}>{b.label}</span>;
+                  })()}
                 </td>
                 <td>
                   <div className="d-flex gap-1">

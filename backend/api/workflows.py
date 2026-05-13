@@ -431,6 +431,7 @@ class ScheduleListItem(BaseModel):
     next_fires_utc: list[datetime]
     last_run_at: datetime | None
     last_run_id: int | None
+    latest_run_status: str | None
 
 
 @router_workflows.get("/schedules", response_model=list[ScheduleListItem])
@@ -469,10 +470,17 @@ async def list_schedules(
     )
 
     q = (
-        select(UserWorkflows, User, WorkflowTypes, last_run_subq.c.last_run_id)
+        select(
+            UserWorkflows,
+            User,
+            WorkflowTypes,
+            last_run_subq.c.last_run_id,
+            WorkflowRuns.status.label("latest_run_status"),
+        )
         .join(User, UserWorkflows.user_id == User.user_id)
         .join(WorkflowTypes, UserWorkflows.type_id == WorkflowTypes.type_id)
         .outerjoin(last_run_subq, UserWorkflows.workflow_id == last_run_subq.c.wf_id)
+        .outerjoin(WorkflowRuns, WorkflowRuns.run_id == last_run_subq.c.last_run_id)
         .where(
             UserWorkflows.deleted == 0,
             UserWorkflows.schedule.isnot(None),
@@ -486,7 +494,7 @@ async def list_schedules(
 
     now_utc = datetime.now(timezone.utc)
     items: list[ScheduleListItem] = []
-    for wf, owner, wf_type, last_run_id in rows:
+    for wf, owner, wf_type, last_run_id, latest_run_status in rows:
         try:
             s = parse_schedule(wf.schedule)
         except ScheduleError:
@@ -507,6 +515,7 @@ async def list_schedules(
             next_fires_utc=fires,
             last_run_at=wf.last_run_at,
             last_run_id=last_run_id,
+            latest_run_status=latest_run_status,
         ))
 
     # Sort: enabled with next fire first (soonest fire on top), then
