@@ -168,6 +168,18 @@ class UserWorkflowCreate(BaseModel):
     schedule: dict | None = None
     enabled: bool = True
 
+    @field_validator("schedule")
+    @classmethod
+    def _validate_schedule_shape(cls, v):
+        if v is None:
+            return v
+        from backend.services.schedule import parse_schedule, ScheduleError
+        try:
+            parse_schedule(v)
+        except ScheduleError as e:
+            raise ValueError(str(e))
+        return v
+
 
 class UserWorkflowRead(BaseModel):
     workflow_id: int
@@ -211,6 +223,18 @@ class UserWorkflowUpdate(BaseModel):
     config: dict | None = None
     schedule: dict | None = None
     enabled: bool | None = None
+
+    @field_validator("schedule")
+    @classmethod
+    def _validate_schedule_shape(cls, v):
+        if v is None:
+            return v
+        from backend.services.schedule import parse_schedule, ScheduleError
+        try:
+            parse_schedule(v)
+        except ScheduleError as e:
+            raise ValueError(str(e))
+        return v
 
 
 class BulkDeleteRequest(BaseModel):

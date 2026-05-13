@@ -1,12 +1,17 @@
-"""Scheduler Service — APScheduler for per-user workflow schedules.
+"""Scheduler Service — APScheduler-driven fire loop for workflow schedules.
 
-Checks for workflows with schedules that are due and triggers runs.
-Schedule config format in user_workflows.schedule:
-{
-    "hour": 8,
-    "minute": 0,
-    "days_of_week": "mon-fri"  // optional, default: every day
-}
+Polls every SCHEDULER_CHECK_INTERVAL_SECONDS. For each workflow with a
+schedule and an enabled, active owner:
+
+  1. Parse the schedule JSON via backend.services.schedule.
+  2. If expired (past ends_on for recurring; past at_local for one_time),
+     auto-disable.
+  3. If already fired today (in the schedule's local TZ), skip.
+  4. If due (within window), fire via _run_workflow_background and
+     for one_time schedules set enabled=False to prevent re-fire.
+
+Skip rules: disabled or deleted owner, soft-deleted workflow, missing
+or malformed schedule (logged, not raised).
 """
 import asyncio
 from datetime import datetime, timezone
@@ -16,8 +21,15 @@ from sqlalchemy import select
 
 from backend.config import SCHEDULER_CHECK_INTERVAL_SECONDS
 from backend.db.session import SqlAsyncSession
-from backend.db.models import UserWorkflows
+from backend.db.models import User, UserWorkflows
 from backend.services.logger_service import get_logger
+from backend.services.schedule import (
+    ScheduleError,
+    fired_today,
+    is_due,
+    is_expired,
+    parse_schedule,
+)
 
 log = get_logger("scheduler")
 
@@ -49,44 +61,69 @@ class WorkflowScheduler:
         log.info("scheduler_stopped")
 
     async def _check_due_workflows(self):
-        """Find workflows with schedules that should run now."""
-        now = datetime.now(timezone.utc)
-        current_hour = now.hour
-        current_minute = now.minute
+        """Find workflows whose schedule should fire now."""
+        now_utc = datetime.now(timezone.utc)
+        # Pad the window by 30s so a slow poll doesn't drop a fire.
+        window_s = SCHEDULER_CHECK_INTERVAL_SECONDS + 30
 
         async with SqlAsyncSession() as session:
             result = await session.execute(
-                select(UserWorkflows).where(
-                    UserWorkflows.enabled == True,
+                select(UserWorkflows)
+                .join(User, UserWorkflows.user_id == User.user_id)
+                .where(
+                    UserWorkflows.enabled == True,  # noqa: E712
                     UserWorkflows.schedule.isnot(None),
+                    UserWorkflows.deleted == 0,
+                    User.is_active == True,  # noqa: E712
+                    User.deleted == 0,
                 )
             )
             workflows = result.scalars().all()
 
         for wf in workflows:
-            schedule = wf.schedule or {}
-            sched_hour = schedule.get("hour")
-            sched_minute = schedule.get("minute", 0)
-
-            if sched_hour is None:
+            try:
+                schedule = parse_schedule(wf.schedule)
+            except ScheduleError as e:
+                log.error(
+                    "schedule_parse_failed",
+                    workflow_id=wf.workflow_id,
+                    error=str(e),
+                )
+                continue
+            if schedule is None:
                 continue
 
-            # Check if it's time to run (within the check interval window)
-            if current_hour == sched_hour and abs(current_minute - sched_minute) < (SCHEDULER_CHECK_INTERVAL_SECONDS // 60 + 1):
-                # Check if already ran today
-                if wf.last_run_at:
-                    last_run_date = wf.last_run_at.date() if wf.last_run_at.tzinfo else wf.last_run_at.date()
-                    if last_run_date == now.date():
-                        continue
+            if is_expired(schedule, now_utc):
+                log.info("schedule_expired_auto_disable", workflow_id=wf.workflow_id)
+                await self._disable_workflow(wf.workflow_id)
+                continue
 
-                log.info("scheduler_triggering", workflow_id=wf.workflow_id, name=wf.name)
+            if fired_today(schedule, wf.last_run_at, now_utc):
+                continue
+
+            if is_due(schedule, now_utc, window_seconds=window_s):
+                log.info(
+                    "scheduler_triggering",
+                    workflow_id=wf.workflow_id,
+                    name=wf.name,
+                    kind=schedule.kind,
+                )
                 asyncio.create_task(self._run_workflow(wf.workflow_id))
+                if schedule.kind == "one_time":
+                    await self._disable_workflow(wf.workflow_id)
+
+    async def _disable_workflow(self, workflow_id: int):
+        """Flip enabled=False. Used for expired schedules and after a one-time fire."""
+        async with SqlAsyncSession() as session:
+            wf = await session.get(UserWorkflows, workflow_id)
+            if wf is not None:
+                wf.enabled = False
+                await session.commit()
 
     async def _run_workflow(self, workflow_id: int):
-        """Run a workflow triggered by the scheduler."""
+        """Fire the workflow via the same path as a manual Run Now."""
         from backend.api.workflows import _run_workflow_background
         await _run_workflow_background(workflow_id)
 
 
-# Singleton
 scheduler = WorkflowScheduler()

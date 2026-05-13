@@ -1,7 +1,9 @@
 import asyncio
 import os
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -411,6 +413,55 @@ async def update_workflow(
     await session.commit()
     await session.refresh(workflow, attribute_names=["workflow_type"])
     return _serialize_workflow(workflow)
+
+
+# ── Schedule preview ────────────────────────────────────────
+
+
+class SchedulePreviewRequest(BaseModel):
+    schedule: dict
+    count: int = 5
+
+
+class SchedulePreviewResponse(BaseModel):
+    summary: str
+    next_fires_utc: list[datetime]
+
+
+@router_workflows.post(
+    "/workflows/{workflow_id}/schedule/preview",
+    response_model=SchedulePreviewResponse,
+)
+async def preview_schedule(
+    workflow_id: int,
+    body: SchedulePreviewRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """Return a human summary + next N fire times for a candidate schedule.
+
+    Loads the workflow first to enforce ownership (so users can only preview
+    schedules against workflows they're allowed to see) but does not mutate
+    anything — the candidate schedule never touches the DB.
+    """
+    await _load_workflow_with_type(session, workflow_id, user)
+
+    from backend.services.schedule import (
+        ScheduleError,
+        human_summary,
+        next_fires,
+        parse_schedule,
+    )
+    try:
+        s = parse_schedule(body.schedule)
+    except ScheduleError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if s is None:
+        raise HTTPException(status_code=400, detail="Empty schedule")
+
+    now_utc = datetime.now(timezone.utc)
+    fires = next_fires(s, now_utc, count=max(1, min(body.count, 20)))
+    return SchedulePreviewResponse(summary=human_summary(s), next_fires_utc=fires)
 
 
 @router_workflows.delete("/workflows/{workflow_id}")
