@@ -5,9 +5,10 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import update
 
-from backend.config import CORS_ORIGINS
+from backend.config import AUTO_START_SCHEDULER, CORS_ORIGINS
 from backend.auth.middleware import refresh_last_seen
 from backend.services.logger_service import get_logger, setup_logging
+from backend.services.scheduler_service import scheduler
 from backend.db.seed import run_seed
 from backend.db.session import SqlAsyncSession
 from backend.db.models import WorkflowRuns
@@ -63,7 +64,14 @@ async def lifespan(app: FastAPI):
     setup_logging()
     await _reset_abandoned_runs()
     await run_seed()
+    if AUTO_START_SCHEDULER:
+        scheduler.start()
+        _log.info("scheduler_autostart")
+    else:
+        _log.info("scheduler_autostart_skipped")
     yield
+    if scheduler.is_running:
+        scheduler.stop()
 
 
 app = FastAPI(

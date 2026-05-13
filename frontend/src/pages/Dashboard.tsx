@@ -12,7 +12,7 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Container, Row, Col, Card, Table, Alert } from "react-bootstrap";
+import { Container, Row, Col, Card, Table, Alert, Button } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import { useSettingsStore, getTrimColor } from "../stores/useSettingsStore";
 import { useAuthStore } from "../stores/useAuthStore";
@@ -167,6 +167,20 @@ export default function Dashboard() {
                     {stats.scheduler_running ? "On" : "Off"}
                   </Card.Title>
                   <Card.Text className="text-muted">Scheduler</Card.Text>
+                  {is_superuser && (
+                    <Button
+                      size="sm"
+                      variant={stats.scheduler_running ? "outline-danger" : "outline-success"}
+                      onClick={async () => {
+                        const endpoint = stats.scheduler_running ? "/scheduler/stop" : "/scheduler/start";
+                        await axiosClient.post(endpoint);
+                        const res = await axiosClient.get<DashboardStats>("/dashboard/stats");
+                        setStats(res.data);
+                      }}
+                    >
+                      {stats.scheduler_running ? "Stop" : "Start"}
+                    </Button>
+                  )}
                 </Card.Body>
               </Card>
             </Col>
