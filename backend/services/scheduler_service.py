@@ -93,11 +93,10 @@ class WorkflowScheduler:
             if schedule is None:
                 continue
 
-            if is_expired(schedule, now_utc):
-                log.info("schedule_expired_auto_disable", workflow_id=wf.workflow_id)
-                await self._disable_workflow(wf.workflow_id)
-                continue
-
+            # Order matters: fire-window check comes first, so a one_time
+            # whose target has just barely passed (e.g., poll runs a few
+            # seconds late after a backend restart) still fires before
+            # the expiry path kicks in.
             if fired_current_slot(schedule, wf.last_run_at, now_utc):
                 continue
 
@@ -111,6 +110,11 @@ class WorkflowScheduler:
                 asyncio.create_task(self._run_workflow(wf.workflow_id))
                 if schedule.kind == "one_time":
                     await self._disable_workflow(wf.workflow_id)
+                continue
+
+            if is_expired(schedule, now_utc):
+                log.info("schedule_expired_auto_disable", workflow_id=wf.workflow_id)
+                await self._disable_workflow(wf.workflow_id)
 
     async def _disable_workflow(self, workflow_id: int):
         """Flip enabled=False. Used for expired schedules and after a one-time fire."""

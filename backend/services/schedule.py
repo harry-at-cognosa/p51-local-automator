@@ -177,16 +177,23 @@ def is_due(s: Schedule, now_utc: datetime, window_seconds: int = 90) -> bool:
     return 0 <= delta < window_seconds
 
 
+_ONE_TIME_EXPIRY_GRACE_SECONDS = 300
+
+
 def is_expired(s: Schedule, now_utc: datetime) -> bool:
     """Return True if the schedule is past its end and should auto-disable.
 
-    For one_time: True if `at_local` is in the past (already fired, or missed
-      due to server downtime).
+    For one_time: True if `at_local + grace` is in the past — the grace
+      window (5 min) keeps a brief backend restart that straddles the
+      target time from immediately disabling the job before the fire
+      window has had a chance to trigger. The polling-loop ordering
+      (is_due before is_expired) handles the in-window case; the grace
+      is a belt-and-suspenders for slow polls or longer restarts.
     For recurring: True if today (in local TZ) is past `ends_on`.
     """
     now_local = now_utc.astimezone(s.tz)
     if s.kind == "one_time":
-        return now_local > s.at_local
+        return (now_local - s.at_local).total_seconds() > _ONE_TIME_EXPIRY_GRACE_SECONDS
     return now_local.date() > s.ends_on
 
 
