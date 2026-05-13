@@ -190,17 +190,35 @@ def is_expired(s: Schedule, now_utc: datetime) -> bool:
     return now_local.date() > s.ends_on
 
 
-def fired_today(s: Schedule, last_run_at_utc: datetime | None, now_utc: datetime) -> bool:
-    """Per-day dedup — has this schedule already fired today (in its TZ)?
+def fired_current_slot(s: Schedule, last_run_at_utc: datetime | None, now_utc: datetime) -> bool:
+    """Has the schedule already fired its *current target slot*?
 
-    Compared in the schedule's local TZ so an 8 PM PT schedule doesn't fire
-    twice when the UTC date rolls.
+    Compares last_run_at against the schedule's most recent expected fire
+    time, not the bare date. This is the correct dedup semantic:
+
+    - Recurring 8 AM, last run at 8:00:30 today → True (don't re-fire).
+    - Recurring 8 AM, last run at 2 PM today (manual) → False — the 8 AM
+      slot today already passed without us firing it; tomorrow at 8 AM the
+      target moves forward and the manual run is before it, so we fire.
+    - One-time at 8:05 PM, manual run at 2:08 PM today → False — the 2 PM
+      run was not this schedule's target slot; 8:05 PM still fires.
+    - One-time at 8:05 PM, last fire at 8:05 PM → True (don't re-fire; the
+      one-time path also sets enabled=False as a belt-and-suspenders).
+
+    Comparison is in UTC so DST doesn't introduce off-by-one-hour bugs.
     """
     if last_run_at_utc is None:
         return False
-    last_local_date = last_run_at_utc.astimezone(s.tz).date()
-    now_local_date = now_utc.astimezone(s.tz).date()
-    return last_local_date == now_local_date
+
+    if s.kind == "one_time":
+        target_utc = s.at_local.astimezone(_UTC)
+        return last_run_at_utc >= target_utc
+
+    # Recurring: today's target time in the schedule's local TZ, normalized to UTC.
+    today_local = now_utc.astimezone(s.tz).date()
+    target_local = datetime.combine(today_local, time(s.hour, s.minute), tzinfo=s.tz)
+    target_utc = target_local.astimezone(_UTC)
+    return last_run_at_utc >= target_utc
 
 
 def next_fires(s: Schedule, after_utc: datetime, count: int = 5) -> list[datetime]:

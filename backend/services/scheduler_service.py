@@ -25,7 +25,7 @@ from backend.db.models import User, UserWorkflows
 from backend.services.logger_service import get_logger
 from backend.services.schedule import (
     ScheduleError,
-    fired_today,
+    fired_current_slot,
     is_due,
     is_expired,
     parse_schedule,
@@ -98,7 +98,7 @@ class WorkflowScheduler:
                 await self._disable_workflow(wf.workflow_id)
                 continue
 
-            if fired_today(schedule, wf.last_run_at, now_utc):
+            if fired_current_slot(schedule, wf.last_run_at, now_utc):
                 continue
 
             if is_due(schedule, now_utc, window_seconds=window_s):
