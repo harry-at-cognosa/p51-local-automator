@@ -24,7 +24,7 @@ interface ScheduleListItem {
   enabled: boolean;
   schedule: Record<string, unknown>;
   summary: string;
-  next_fire_utc: string | null;
+  next_fires_utc: string[];
   last_run_at: string | null;
 }
 
@@ -159,7 +159,7 @@ export default function Schedules() {
                   <div className="text-muted small">{item.type_long_name}</div>
                 </td>
                 <td className="small">{item.summary}</td>
-                <td className="small">{formatFireTime(item.next_fire_utc)}</td>
+                <td className="small">{formatFireTime(item.next_fires_utc[0] || null)}</td>
                 <td className="small text-muted">{item.user_email}</td>
                 <td>
                   {item.enabled

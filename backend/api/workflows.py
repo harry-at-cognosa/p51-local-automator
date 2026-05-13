@@ -428,7 +428,7 @@ class ScheduleListItem(BaseModel):
     enabled: bool
     schedule: dict
     summary: str
-    next_fire_utc: datetime | None
+    next_fires_utc: list[datetime]
     last_run_at: datetime | None
 
 
@@ -478,7 +478,7 @@ async def list_schedules(
             continue
         if s is None:
             continue
-        fires = next_fires(s, now_utc, count=1)
+        fires = next_fires(s, now_utc, count=5)
         items.append(ScheduleListItem(
             workflow_id=wf.workflow_id,
             workflow_name=wf.name,
@@ -489,7 +489,7 @@ async def list_schedules(
             enabled=wf.enabled,
             schedule=wf.schedule,
             summary=human_summary(s),
-            next_fire_utc=fires[0] if fires else None,
+            next_fires_utc=fires,
             last_run_at=wf.last_run_at,
         ))
 
@@ -497,7 +497,7 @@ async def list_schedules(
     # enabled but no upcoming fire, then paused at bottom.
     far_future = datetime.max.replace(tzinfo=timezone.utc)
     items.sort(
-        key=lambda i: (not i.enabled, i.next_fire_utc or far_future)
+        key=lambda i: (not i.enabled, i.next_fires_utc[0] if i.next_fires_utc else far_future)
     )
     return items
 

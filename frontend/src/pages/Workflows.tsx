@@ -1,11 +1,27 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Container, Table, Button, Modal, Form, Alert } from "react-bootstrap";
+import { Container, Table, Button, Modal, Form, Alert, OverlayTrigger, Popover } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
 import TableVCRPager from "../components/TableVCRPager";
 import { useWorkflowsStore } from "../stores/workflowsStore";
+
+interface ScheduleEntry {
+  workflow_id: number;
+  next_fires_utc: string[];
+  enabled: boolean;
+}
+
+function formatFireShort(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 const STATUS_OPTIONS = ["completed", "running", "failed", "pending"];
 const STATUS_NONE = "__none__";
@@ -39,7 +55,21 @@ export default function Workflows() {
   const [newName, setNewName] = useState("");
   const [newConfig, setNewConfig] = useState<Record<string, unknown>>({});
 
+  const [scheduledOnly, setScheduledOnly] = useState(false);
+  const [scheduleMap, setScheduleMap] = useState<Record<number, ScheduleEntry>>({});
+
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  useEffect(() => {
+    axiosClient
+      .get<ScheduleEntry[]>("/schedules")
+      .then((res) => {
+        const m: Record<number, ScheduleEntry> = {};
+        for (const s of res.data) m[s.workflow_id] = s;
+        setScheduleMap(m);
+      })
+      .catch(() => { /* schedules are optional info — fail silent */ });
+  }, [items]);
 
   // Filtered dataset (client-side)
   const filtered = useMemo(() => {
@@ -55,9 +85,10 @@ export default function Workflows() {
         }
       }
       if (nameQ && !w.name.toLowerCase().includes(nameQ)) return false;
+      if (scheduledOnly && !scheduleMap[w.workflow_id]) return false;
       return true;
     });
-  }, [items, filters]);
+  }, [items, filters, scheduledOnly, scheduleMap]);
 
   // Sorted (after filter, before pagination). All sorts are descending.
   // last_run_at puts NULL (never run) rows at the bottom.
@@ -143,19 +174,29 @@ export default function Workflows() {
         <p className="text-muted">No workflows configured yet. Click "+ New Workflow" to get started.</p>
       ) : (
         <>
-          <div className="d-flex align-items-center gap-2 py-2">
-            <span className="text-muted small">Sort by:</span>
-            <Form.Select
-              size="sm"
-              style={{ width: "auto" }}
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as "workflow_id" | "last_run_at" | "created_at")}
-              aria-label="Sort workflows"
-            >
-              <option value="workflow_id">ID (newest first)</option>
-              <option value="last_run_at">Last run (newest first)</option>
-              <option value="created_at">Created (newest first)</option>
-            </Form.Select>
+          <div className="d-flex align-items-center gap-3 py-2">
+            <div className="d-flex align-items-center gap-2">
+              <span className="text-muted small">Sort by:</span>
+              <Form.Select
+                size="sm"
+                style={{ width: "auto" }}
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as "workflow_id" | "last_run_at" | "created_at")}
+                aria-label="Sort workflows"
+              >
+                <option value="workflow_id">ID (newest first)</option>
+                <option value="last_run_at">Last run (newest first)</option>
+                <option value="created_at">Created (newest first)</option>
+              </Form.Select>
+            </div>
+            <Form.Check
+              type="switch"
+              id="scheduled-only"
+              label="Show scheduled only"
+              checked={scheduledOnly}
+              onChange={(e) => setScheduledOnly(e.target.checked)}
+              className="small text-muted"
+            />
           </div>
 
           <TableVCRPager
@@ -179,6 +220,7 @@ export default function Workflows() {
                 <th>Name <span className="text-muted fw-normal small">(click to review)</span></th>
                 <th>Status</th>
                 <th>Last Run</th>
+                <th>Next Fire</th>
               </tr>
               <tr className="table-light">
                 <th></th>
@@ -243,6 +285,7 @@ export default function Workflows() {
                   </Form.Select>
                 </th>
                 <th></th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -283,12 +326,47 @@ export default function Workflows() {
                       )}
                     </td>
                     <td>{w.latest_run_at ? new Date(w.latest_run_at).toLocaleString() : "Never"}</td>
+                    <td className="small">
+                      {(() => {
+                        const sch = scheduleMap[w.workflow_id];
+                        if (!sch || sch.next_fires_utc.length === 0) {
+                          return <span className="text-muted">—</span>;
+                        }
+                        const popover = (
+                          <Popover id={`next-fires-${w.workflow_id}`}>
+                            <Popover.Header as="h6" className="small">
+                              Next {sch.next_fires_utc.length} fire{sch.next_fires_utc.length === 1 ? "" : "s"}
+                              {!sch.enabled && " (paused)"}
+                            </Popover.Header>
+                            <Popover.Body className="small p-2">
+                              <ol className="mb-0 ps-3">
+                                {sch.next_fires_utc.map((iso, i) => (
+                                  <li key={i}>{formatFireShort(iso)}</li>
+                                ))}
+                              </ol>
+                            </Popover.Body>
+                          </Popover>
+                        );
+                        return (
+                          <OverlayTrigger trigger={["hover", "focus"]} placement="left" overlay={popover}>
+                            <span
+                              style={{ cursor: "help", textDecoration: sch.enabled ? undefined : "line-through" }}
+                            >
+                              {formatFireShort(sch.next_fires_utc[0])}
+                              {sch.next_fires_utc.length > 1 && (
+                                <span className="text-muted ms-1">+{sch.next_fires_utc.length - 1}</span>
+                              )}
+                            </span>
+                          </OverlayTrigger>
+                        );
+                      })()}
+                    </td>
                   </tr>
                 );
               })}
               {pageItems.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-center text-muted py-3">
+                  <td colSpan={8} className="text-center text-muted py-3">
                     No workflows match the current filters.{" "}
                     <Button variant="link" size="sm" onClick={() => { clearSelection(); useWorkflowsStore.getState().resetFilters(); }}>
                       Clear filters
