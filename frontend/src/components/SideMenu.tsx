@@ -19,6 +19,9 @@ export default function SideMenu() {
         <LinkContainer to="/app/workflows">
           <Nav.Link>Workflows</Nav.Link>
         </LinkContainer>
+        <LinkContainer to="/app/schedules">
+          <Nav.Link>Schedules</Nav.Link>
+        </LinkContainer>
         <LinkContainer to="/app/connections">
           <Nav.Link>Connections</Nav.Link>
         </LinkContainer>

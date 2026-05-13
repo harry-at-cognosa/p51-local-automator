@@ -7,6 +7,7 @@ import {
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
+import EditScheduleModal from "../components/EditScheduleModal";
 import { useAuthStore } from "../stores/useAuthStore";
 
 interface WorkflowCategoryNested {
@@ -53,6 +54,42 @@ interface WorkflowRun {
   archived: boolean;
 }
 
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function scheduleSummary(
+  schedule: Record<string, unknown> | null,
+  enabled: boolean,
+): string {
+  if (!schedule) return "Not scheduled — runs only via Run Now or API.";
+  const kind = schedule.kind as string | undefined;
+  const tz = (schedule.tz as string | undefined) || "UTC";
+  const status = enabled ? "" : " (paused)";
+
+  if (kind === "one_time") {
+    const at = schedule.at_local as string | undefined;
+    return `One-time: ${at} ${tz}. Auto-disables after firing.${status}`;
+  }
+
+  // recurring (or legacy {hour, minute})
+  const hour = (schedule.hour as number | undefined) ?? 0;
+  const minute = (schedule.minute as number | undefined) ?? 0;
+  const days = (schedule.days_of_week as number[] | undefined) ?? [0, 1, 2, 3, 4, 5, 6];
+  const interval = (schedule.week_interval as number | undefined) ?? 1;
+  const startsOn = schedule.starts_on as string | undefined;
+  const endsOn = schedule.ends_on as string | undefined;
+
+  let dayPart: string;
+  if (JSON.stringify(days) === JSON.stringify([0, 1, 2, 3, 4])) dayPart = "Workdays";
+  else if (JSON.stringify(days) === JSON.stringify([0, 1, 2, 3, 4, 5, 6])) dayPart = "Every day";
+  else dayPart = days.map((d) => DAY_LABELS[d]).join(", ");
+
+  const every = interval > 1 ? `Every ${interval} weeks on ` : "";
+  const hh = String(hour).padStart(2, "0");
+  const mm = String(minute).padStart(2, "0");
+  const range = startsOn && endsOn ? ` From ${startsOn} until ${endsOn}.` : "";
+  return `${every}${dayPart} at ${hh}:${mm} ${tz}.${range}${status}`;
+}
+
 export default function WorkflowDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -68,6 +105,7 @@ export default function WorkflowDetail() {
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState("");
   const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [showSchedule, setShowSchedule] = useState(false);
 
   const fetchData = () => {
     axiosClient.get(`/workflows/${id}`).then((res) => {
@@ -277,15 +315,29 @@ export default function WorkflowDetail() {
         </Card.Body>
       </Card>
 
-      {workflow.schedule && workflow.type?.schedulable !== false && (
+      {workflow.type?.schedulable !== false && (
         <Card className="mt-3">
-          <Card.Header>Schedule</Card.Header>
-          <Card.Body>
-            <pre className="mb-0" style={{ fontSize: "0.85em", whiteSpace: "pre-wrap" }}>
-              {JSON.stringify(workflow.schedule, null, 2)}
-            </pre>
+          <Card.Header className="d-flex justify-content-between align-items-center">
+            <span>Schedule</span>
+            <Button size="sm" variant="outline-primary" onClick={() => setShowSchedule(true)}>
+              {workflow.schedule ? "Edit" : "Add schedule"}
+            </Button>
+          </Card.Header>
+          <Card.Body className="small">
+            {scheduleSummary(workflow.schedule, workflow.enabled)}
           </Card.Body>
         </Card>
+      )}
+
+      {showSchedule && (
+        <EditScheduleModal
+          show={true}
+          workflowId={workflow.workflow_id}
+          workflowName={workflow.name}
+          currentSchedule={workflow.schedule}
+          onHide={() => setShowSchedule(false)}
+          onSaved={() => { setShowSchedule(false); fetchData(); }}
+        />
       )}
 
       <Card className="mt-3">

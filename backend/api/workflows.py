@@ -415,7 +415,91 @@ async def update_workflow(
     return _serialize_workflow(workflow)
 
 
-# ── Schedule preview ────────────────────────────────────────
+# ── Schedule listing + preview ──────────────────────────────
+
+
+class ScheduleListItem(BaseModel):
+    workflow_id: int
+    workflow_name: str
+    user_id: int
+    user_email: str
+    type_id: int
+    type_long_name: str
+    enabled: bool
+    schedule: dict
+    summary: str
+    next_fire_utc: datetime | None
+    last_run_at: datetime | None
+
+
+@router_workflows.get("/schedules", response_model=list[ScheduleListItem])
+async def list_schedules(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """All scheduled workflows visible to the caller.
+
+    Scope: employees see their own; managers and groupadmins see their
+    group; superusers see everything. Includes paused (enabled=false)
+    rows so users can resume them from the cockpit.
+
+    `next_fire_utc` is computed server-side so the frontend doesn't
+    duplicate the schedule evaluation logic.
+    """
+    from backend.services.schedule import (
+        ScheduleError,
+        human_summary,
+        next_fires,
+        parse_schedule,
+    )
+
+    scope = _run_scope_filter(user)
+    q = (
+        select(UserWorkflows, User, WorkflowTypes)
+        .join(User, UserWorkflows.user_id == User.user_id)
+        .join(WorkflowTypes, UserWorkflows.type_id == WorkflowTypes.type_id)
+        .where(
+            UserWorkflows.deleted == 0,
+            UserWorkflows.schedule.isnot(None),
+        )
+    )
+    for clause in scope:
+        q = q.where(clause)
+
+    result = await session.execute(q)
+    rows = result.all()
+
+    now_utc = datetime.now(timezone.utc)
+    items: list[ScheduleListItem] = []
+    for wf, owner, wf_type in rows:
+        try:
+            s = parse_schedule(wf.schedule)
+        except ScheduleError:
+            continue
+        if s is None:
+            continue
+        fires = next_fires(s, now_utc, count=1)
+        items.append(ScheduleListItem(
+            workflow_id=wf.workflow_id,
+            workflow_name=wf.name,
+            user_id=wf.user_id,
+            user_email=owner.email,
+            type_id=wf.type_id,
+            type_long_name=wf_type.long_name,
+            enabled=wf.enabled,
+            schedule=wf.schedule,
+            summary=human_summary(s),
+            next_fire_utc=fires[0] if fires else None,
+            last_run_at=wf.last_run_at,
+        ))
+
+    # Sort: enabled with next fire first (soonest fire on top), then
+    # enabled but no upcoming fire, then paused at bottom.
+    far_future = datetime.max.replace(tzinfo=timezone.utc)
+    items.sort(
+        key=lambda i: (not i.enabled, i.next_fire_utc or far_future)
+    )
+    return items
 
 
 class SchedulePreviewRequest(BaseModel):

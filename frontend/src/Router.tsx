@@ -15,6 +15,7 @@ import ManageWorkflowTypes from "./pages/ManageWorkflowTypes";
 import Settings from "./pages/Settings";
 import GroupSettings from "./pages/GroupSettings";
 import Maintenance from "./pages/Maintenance";
+import Schedules from "./pages/Schedules";
 
 export const Router = createBrowserRouter([
   {
@@ -44,6 +45,10 @@ export const Router = createBrowserRouter([
       {
         path: "connections",
         element: <Connections />,
+      },
+      {
+        path: "schedules",
+        element: <Schedules />,
       },
       {
         path: "admin/users",
