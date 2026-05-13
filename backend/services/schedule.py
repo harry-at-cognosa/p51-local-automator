@@ -61,6 +61,31 @@ class Schedule:
     week_interval: int | None = None
 
 
+def validate_for_save(d: dict | None, now_utc: datetime | None = None) -> Schedule | None:
+    """Parse + reject any shape that doesn't make sense to save right now.
+
+    On top of parse_schedule's structural checks, refuses to save a one_time
+    schedule whose at_local is already in the past (with 60s grace for
+    frontend/backend clock drift). The polling loop's is_expired path will
+    handle a past at_local gracefully — but a user typing a past time into
+    the form is almost certainly a mistake (AM/PM mix-up, fat-finger), so
+    we reject at the API boundary.
+
+    parse_schedule remains the deserializer used by the polling loop; that
+    one must accept "past" schedules in the DB without complaining.
+    """
+    s = parse_schedule(d)
+    if s is None or s.kind != "one_time":
+        return s
+    now = now_utc or datetime.now(timezone.utc)
+    delta = (now - s.at_local.astimezone(_UTC)).total_seconds()
+    if delta > 60:
+        raise ScheduleError(
+            "One-time schedule must be in the future. The selected time is already past."
+        )
+    return s
+
+
 def parse_schedule(d: dict | None) -> Schedule | None:
     """Parse a raw dict into a Schedule. Returns None for no schedule.
 

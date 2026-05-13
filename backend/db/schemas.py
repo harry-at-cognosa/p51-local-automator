@@ -173,9 +173,9 @@ class UserWorkflowCreate(BaseModel):
     def _validate_schedule_shape(cls, v):
         if v is None:
             return v
-        from backend.services.schedule import parse_schedule, ScheduleError
+        from backend.services.schedule import validate_for_save, ScheduleError
         try:
-            parse_schedule(v)
+            validate_for_save(v)
         except ScheduleError as e:
             raise ValueError(str(e))
         return v
@@ -229,9 +229,9 @@ class UserWorkflowUpdate(BaseModel):
     def _validate_schedule_shape(cls, v):
         if v is None:
             return v
-        from backend.services.schedule import parse_schedule, ScheduleError
+        from backend.services.schedule import validate_for_save, ScheduleError
         try:
-            parse_schedule(v)
+            validate_for_save(v)
         except ScheduleError as e:
             raise ValueError(str(e))
         return v

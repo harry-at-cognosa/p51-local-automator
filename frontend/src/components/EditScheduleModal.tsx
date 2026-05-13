@@ -119,6 +119,16 @@ export default function EditScheduleModal({
     setPreview(null);
   }, [show, currentSchedule]);
 
+  // Reject saving a one_time whose date+time is already in the past.
+  // 60s grace covers the form-fill → click-Save round trip and any clock
+  // drift between browser and backend.
+  const oneTimeIsPast = (() => {
+    if (mode !== "one_time") return false;
+    if (!oneTimeDate || !oneTimeTime) return false;
+    const candidate = new Date(`${oneTimeDate}T${oneTimeTime}`);
+    return candidate.getTime() < Date.now() - 60_000;
+  })();
+
   // Build the schedule dict the backend expects, given current form state
   function buildSchedule(): Record<string, unknown> | null {
     if (mode === "none") return null;
@@ -277,6 +287,11 @@ export default function EditScheduleModal({
             <Form.Text className="text-muted">
               The schedule will auto-disable after this run completes.
             </Form.Text>
+            {oneTimeIsPast && (
+              <Alert variant="warning" className="mt-3 mb-0 small">
+                <strong>This time is in the past.</strong> Pick a future date/time — a one-time schedule fires only once at the chosen moment.
+              </Alert>
+            )}
           </>
         )}
 
@@ -409,7 +424,7 @@ export default function EditScheduleModal({
         <Button variant="secondary" onClick={onHide} disabled={saving}>
           Cancel
         </Button>
-        <Button variant="primary" onClick={handleSave} disabled={saving || !!error}>
+        <Button variant="primary" onClick={handleSave} disabled={saving || !!error || oneTimeIsPast}>
           {saving ? "Saving…" : "Save"}
         </Button>
       </Modal.Footer>
