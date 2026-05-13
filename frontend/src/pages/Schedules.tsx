@@ -26,6 +26,7 @@ interface ScheduleListItem {
   summary: string;
   next_fires_utc: string[];
   last_run_at: string | null;
+  last_run_id: number | null;
 }
 
 interface WorkflowSummary {
@@ -135,9 +136,11 @@ export default function Schedules() {
         <Table hover responsive>
           <thead>
             <tr>
+              <th style={{ width: 56 }}>ID</th>
               <th>Workflow</th>
               <th>When</th>
               <th>Next fire</th>
+              <th>Last run</th>
               <th>Owner</th>
               <th>Status</th>
               <th style={{ width: 280 }}>Actions</th>
@@ -149,6 +152,7 @@ export default function Schedules() {
                 key={item.workflow_id}
                 style={item.enabled ? undefined : { opacity: 0.55 }}
               >
+                <td className="text-muted small font-monospace">#{item.workflow_id}</td>
                 <td>
                   <a
                     href={`/app/workflows/${item.workflow_id}`}
@@ -160,6 +164,24 @@ export default function Schedules() {
                 </td>
                 <td className="small">{item.summary}</td>
                 <td className="small">{formatFireTime(item.next_fires_utc[0] || null)}</td>
+                <td className="small">
+                  {item.last_run_id ? (
+                    <a
+                      href={`/app/runs/${item.last_run_id}`}
+                      onClick={(e) => { e.preventDefault(); navigate(`/app/runs/${item.last_run_id}`); }}
+                      className="font-monospace"
+                    >
+                      #{item.last_run_id}
+                    </a>
+                  ) : (
+                    <span className="text-muted">never</span>
+                  )}
+                  {item.last_run_at && (
+                    <div className="text-muted" style={{ fontSize: "0.75em" }}>
+                      {new Date(item.last_run_at).toLocaleString()}
+                    </div>
+                  )}
+                </td>
                 <td className="small text-muted">{item.user_email}</td>
                 <td>
                   {item.enabled

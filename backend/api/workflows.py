@@ -430,6 +430,7 @@ class ScheduleListItem(BaseModel):
     summary: str
     next_fires_utc: list[datetime]
     last_run_at: datetime | None
+    last_run_id: int | None
 
 
 @router_workflows.get("/schedules", response_model=list[ScheduleListItem])
@@ -454,10 +455,24 @@ async def list_schedules(
     )
 
     scope = _run_scope_filter(user)
+
+    # Subquery: latest run_id per workflow (any trigger). Left-joined so
+    # workflows that have never run still appear in the list with
+    # last_run_id=None.
+    last_run_subq = (
+        select(
+            WorkflowRuns.workflow_id.label("wf_id"),
+            func.max(WorkflowRuns.run_id).label("last_run_id"),
+        )
+        .group_by(WorkflowRuns.workflow_id)
+        .subquery()
+    )
+
     q = (
-        select(UserWorkflows, User, WorkflowTypes)
+        select(UserWorkflows, User, WorkflowTypes, last_run_subq.c.last_run_id)
         .join(User, UserWorkflows.user_id == User.user_id)
         .join(WorkflowTypes, UserWorkflows.type_id == WorkflowTypes.type_id)
+        .outerjoin(last_run_subq, UserWorkflows.workflow_id == last_run_subq.c.wf_id)
         .where(
             UserWorkflows.deleted == 0,
             UserWorkflows.schedule.isnot(None),
@@ -471,7 +486,7 @@ async def list_schedules(
 
     now_utc = datetime.now(timezone.utc)
     items: list[ScheduleListItem] = []
-    for wf, owner, wf_type in rows:
+    for wf, owner, wf_type, last_run_id in rows:
         try:
             s = parse_schedule(wf.schedule)
         except ScheduleError:
@@ -491,6 +506,7 @@ async def list_schedules(
             summary=human_summary(s),
             next_fires_utc=fires,
             last_run_at=wf.last_run_at,
+            last_run_id=last_run_id,
         ))
 
     # Sort: enabled with next fire first (soonest fire on top), then

@@ -181,12 +181,19 @@ def is_due(s: Schedule, now_utc: datetime, window_seconds: int = 90) -> bool:
 
     The window is forward-only: a fire is "due" iff now ∈ [target, target+window).
     This matches the polling model — we want to fire once per poll, not retroactively.
+
+    Exception: for one_time schedules, the window is widened to the same
+    grace period that governs is_expired (default 5 min). This lets a fire
+    catch up if the backend was briefly down or restarted at exactly the
+    wrong moment. Without the widening, a one_time could sit in a dead zone
+    between (target + 90s) and (target + 5 min) where it neither fires nor
+    auto-disables — visible as enabled=True, next_fires_utc=[].
     """
     now_local = now_utc.astimezone(s.tz)
 
     if s.kind == "one_time":
         delta = (now_local - s.at_local).total_seconds()
-        return 0 <= delta < window_seconds
+        return 0 <= delta < _ONE_TIME_EXPIRY_GRACE_SECONDS
 
     today_local = now_local.date()
     if today_local < s.starts_on or today_local > s.ends_on:
