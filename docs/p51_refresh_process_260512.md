@@ -81,7 +81,7 @@ Run this if **either** of these is true:
 ```bash
 cd ~/p51-local-automator
 source venv/bin/activate
-alembic current        # what revision are we at?
+alembic current        # what revision are we at?  [a8b3c5d7e9f2 (head) 26-05-12]
 alembic heads          # what does the code expect?
 alembic upgrade head   # bring DB up to code (idempotent)
 ```
@@ -252,3 +252,17 @@ python3 -m uvicorn backend.main:app --port 8000
 ```
 
 Slow but safe — always works.
+
+finding the servers when not in a terminal:
+
+finding fastAPI vite and npm servers when no in a terminal window:
+
+ps aux | grep -E "uvicorn|vite" | grep -v grep
+or use 
+
+A port-based alternative that's often easier:
+  
+  lsof -i :8000 -i :5173 -P -n
+  Shows what's listening on those ports plus the PIDs.
+  To stop them: kill <PID> from any of your shells works, since you own them.
+    
