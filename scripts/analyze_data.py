@@ -254,7 +254,20 @@ def write_filtered_excel(df: pd.DataFrame, output_path: str, date_col: str | Non
         print(f"  Saved filtered CSV: {csv_path} ({len(df)} rows, {len(df.columns)} columns; xlsx row cap exceeded)")
         return
 
+    from datetime import datetime
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    def _xlsx_safe(v):
+        # openpyxl rejects ASCII control chars (e.g. \x01) in strings and
+        # refuses tz-aware datetimes. Both are common in real-world CSVs
+        # (scraped email bodies, ISO-with-tz date columns) — neutralize
+        # them at the cell boundary instead of forcing every caller to.
+        if isinstance(v, str):
+            return ILLEGAL_CHARACTERS_RE.sub("", v)
+        if isinstance(v, datetime) and v.tzinfo is not None:
+            return v.replace(tzinfo=None)
+        return v
 
     wb = Workbook()
     ws = wb.active
@@ -265,7 +278,7 @@ def write_filtered_excel(df: pd.DataFrame, output_path: str, date_col: str | Non
     header_font = Font(color="FFFFFF", bold=True, size=11)
 
     for col_idx, col_name in enumerate(df.columns, 1):
-        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell = ws.cell(row=1, column=col_idx, value=_xlsx_safe(col_name))
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
@@ -273,7 +286,7 @@ def write_filtered_excel(df: pd.DataFrame, output_path: str, date_col: str | Non
     # Write data
     for row_idx, row in enumerate(df.itertuples(index=False), 2):
         for col_idx, value in enumerate(row, 1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = ws.cell(row=row_idx, column=col_idx, value=_xlsx_safe(value))
             # Format numbers
             if isinstance(value, float):
                 cell.number_format = "#,##0.00"
