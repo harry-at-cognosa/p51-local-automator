@@ -77,7 +77,12 @@ def load_data(file_path: str) -> pd.DataFrame:
     if ext == ".csv":
         df = pd.read_csv(file_path, on_bad_lines="skip")
     elif ext in (".xlsx", ".xls"):
-        df = pd.read_excel(file_path)
+        sheets = pd.read_excel(file_path, sheet_name=None)
+        if len(sheets) == 1:
+            df = next(iter(sheets.values()))
+        else:
+            df = pd.concat(sheets.values(), ignore_index=True)
+            print(f"Concatenated {len(sheets)} sheets: {list(sheets.keys())}")
     else:
         print(f"ERROR: Unsupported file format: {ext}")
         sys.exit(1)
