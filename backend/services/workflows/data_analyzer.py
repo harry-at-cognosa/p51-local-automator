@@ -127,6 +127,8 @@ async def run_data_analyzer(
             fpath = os.path.join(output_dir, fname)
             if fname.endswith(".xlsx"):
                 await engine.record_artifact(session, run.run_id, step1.step_id, fpath, "xlsx", "Filtered data")
+            elif fname.endswith(".csv"):
+                await engine.record_artifact(session, run.run_id, step1.step_id, fpath, "csv", "Filtered data")
             elif fname.endswith(".png"):
                 await engine.record_artifact(session, run.run_id, step1.step_id, fpath, "png", f"Chart: {fname}")
             elif fname.endswith(".md"):

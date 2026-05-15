@@ -239,8 +239,21 @@ def select_key_fields(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return kept, drop_cols
 
 
+XLSX_MAX_ROWS = 1_048_575  # Excel's 1,048,576 cap minus the header row.
+
+
 def write_filtered_excel(df: pd.DataFrame, output_path: str, date_col: str | None):
-    """Write filtered data to a nicely formatted Excel file."""
+    """Write filtered data to a nicely formatted Excel file.
+
+    Falls back to CSV (sibling .csv path) when row count exceeds the xlsx
+    per-sheet hard limit — preserves audit trail without truncating data.
+    """
+    if len(df) > XLSX_MAX_ROWS:
+        csv_path = os.path.splitext(output_path)[0] + ".csv"
+        df.to_csv(csv_path, index=False)
+        print(f"  Saved filtered CSV: {csv_path} ({len(df)} rows, {len(df.columns)} columns; xlsx row cap exceeded)")
+        return
+
     from openpyxl import Workbook
 
     wb = Workbook()
