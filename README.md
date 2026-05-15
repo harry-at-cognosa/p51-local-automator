@@ -77,6 +77,23 @@ python3 -m uvicorn backend.main:app --port 8000
 # Login: admin / admin
 ```
 
+## Demo install (optional)
+
+Five sample workflows over four public datasets — exercises both Type 2
+and Type 7 without needing email/calendar accounts wired up. Requires
+the fixtures bundle (provided separately, ~130 MB).
+
+```bash
+# stage the fixtures bundle at ~/p51_demo_fixtures, then:
+./venv/bin/python scripts/seed_demo.py --source-dir ~/p51_demo_fixtures
+# log in as demo_user / demo-5555
+```
+
+See [docs/demo_workflows.md](docs/demo_workflows.md) for what each
+workflow does and what to expect. To regenerate the bundle from
+upstream sources, see
+[docs/preparing_demo_fixtures.md](docs/preparing_demo_fixtures.md).
+
 ## MCP Servers
 
 The platform uses local MCP (Model Context Protocol) servers to access Apple and Google services. These run as subprocesses — no manual startup needed.
