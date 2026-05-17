@@ -10,6 +10,11 @@ interface Props {
   selectedCount: number;
   onSelectAllOnPage: () => void;
   onBulkDelete: () => void;
+  // Optional Schedule action: enabled only when exactly one row is selected.
+  // Renders to the right of "Select all on page" / "Delete Selected" when
+  // onSchedule is provided; omitted entirely otherwise (other tables that
+  // reuse this pager don't get a stray button).
+  onSchedule?: () => void;
 }
 
 export default function TableVCRPager({
@@ -21,6 +26,7 @@ export default function TableVCRPager({
   selectedCount,
   onSelectAllOnPage,
   onBulkDelete,
+  onSchedule,
 }: Props) {
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
   const atFirst = page <= 1;
@@ -118,6 +124,23 @@ export default function TableVCRPager({
         >
           Delete selected{selectedCount > 0 ? ` (${selectedCount})` : ""}
         </Button>
+        {onSchedule && (
+          <Button
+            size="sm"
+            variant="outline-success"
+            disabled={selectedCount !== 1}
+            onClick={onSchedule}
+            title={
+              selectedCount === 0
+                ? "Select a single workflow to schedule it."
+                : selectedCount > 1
+                ? "Schedule supports one workflow at a time. Select just one."
+                : "Schedule this workflow"
+            }
+          >
+            Schedule
+          </Button>
+        )}
       </div>
     </div>
   );

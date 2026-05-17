@@ -205,6 +205,7 @@ class UserWorkflowListRead(BaseModel):
     group_id: int
     type_id: int
     name: str
+    config: dict
     schedule: dict | None
     enabled: bool
     last_run_at: datetime | None
@@ -213,6 +214,7 @@ class UserWorkflowListRead(BaseModel):
     latest_run_status: str | None
     latest_run_at: datetime | None
     latest_run_artifact_count: int | None
+    latest_completed_run_at: datetime | None
 
     class Config:
         from_attributes = True

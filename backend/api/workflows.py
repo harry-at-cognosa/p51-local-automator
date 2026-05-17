@@ -222,6 +222,21 @@ async def list_workflows(
         .subquery()
     )
 
+    # Sibling subquery: latest *completed* run per workflow. Used by the
+    # Schedules picker to score eligibility — workflows surfaced there must
+    # have proven they can complete at least once. Archived runs counted
+    # since their completion still constitutes past proof.
+    latest_completed_runs = (
+        select(
+            WorkflowRuns.workflow_id,
+            WorkflowRuns.started_at.label("latest_completed_started_at"),
+        )
+        .where(WorkflowRuns.status == "completed")
+        .distinct(WorkflowRuns.workflow_id)
+        .order_by(WorkflowRuns.workflow_id, WorkflowRuns.started_at.desc())
+        .subquery()
+    )
+
     # Artifact count per run (for the latest run's run_id)
     artifact_counts = (
         select(
@@ -238,6 +253,7 @@ async def list_workflows(
             latest_runs.c.latest_status,
             latest_runs.c.latest_started_at,
             artifact_counts.c.artifact_count,
+            latest_completed_runs.c.latest_completed_started_at,
         )
         .join(
             latest_runs,
@@ -249,6 +265,11 @@ async def list_workflows(
             latest_runs.c.latest_run_id == artifact_counts.c.run_id,
             isouter=True,
         )
+        .join(
+            latest_completed_runs,
+            UserWorkflows.workflow_id == latest_completed_runs.c.workflow_id,
+            isouter=True,
+        )
         .options(
             selectinload(UserWorkflows.workflow_type).selectinload(WorkflowTypes.category)
         )
@@ -258,7 +279,13 @@ async def list_workflows(
     )
 
     rows = []
-    for workflow, latest_status, latest_started_at, artifact_count in result.all():
+    for (
+        workflow,
+        latest_status,
+        latest_started_at,
+        artifact_count,
+        latest_completed_at,
+    ) in result.all():
         # If there is a latest run, artifact_count is 0 when the LEFT JOIN
         # found no artifact rows. If there's no run at all, keep it None.
         if latest_status is None:
@@ -272,6 +299,7 @@ async def list_workflows(
                 group_id=workflow.group_id,
                 type_id=workflow.type_id,
                 name=workflow.name,
+                config=workflow.config or {},
                 schedule=workflow.schedule,
                 enabled=workflow.enabled,
                 last_run_at=workflow.last_run_at,
@@ -280,6 +308,7 @@ async def list_workflows(
                 latest_run_status=latest_status,
                 latest_run_at=latest_started_at,
                 latest_run_artifact_count=normalized_count,
+                latest_completed_run_at=latest_completed_at,
             )
         )
     return rows

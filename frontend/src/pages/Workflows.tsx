@@ -5,6 +5,7 @@ import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
 import TableVCRPager from "../components/TableVCRPager";
+import EditScheduleModal from "../components/EditScheduleModal";
 import { useWorkflowsStore } from "../stores/workflowsStore";
 
 interface ScheduleEntry {
@@ -57,6 +58,15 @@ export default function Workflows() {
 
   const [scheduledOnly, setScheduledOnly] = useState(false);
   const [scheduleMap, setScheduleMap] = useState<Record<number, ScheduleEntry>>({});
+
+  // Schedule modal target — set when the bulk-action Schedule button is
+  // clicked with exactly one row selected. The modal is the same
+  // EditScheduleModal used by WorkflowDetail and the Schedules-page picker.
+  const [scheduleTarget, setScheduleTarget] = useState<{
+    workflow_id: number;
+    name: string;
+    schedule: Record<string, unknown> | null;
+  } | null>(null);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -141,6 +151,18 @@ export default function Workflows() {
     await bulkDelete(ids);
   };
 
+  const handleSchedule = () => {
+    if (selectedIds.size !== 1) return;
+    const id = Array.from(selectedIds)[0];
+    const wf = items.find((w) => w.workflow_id === id);
+    if (!wf) return;
+    setScheduleTarget({
+      workflow_id: wf.workflow_id,
+      name: wf.name,
+      schedule: wf.schedule,
+    });
+  };
+
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     const wfType = types.find((t) => t.type_id === selectedTypeId);
@@ -208,6 +230,7 @@ export default function Workflows() {
             selectedCount={selectedIds.size}
             onSelectAllOnPage={handleSelectAllOnPage}
             onBulkDelete={handleBulkDelete}
+            onSchedule={handleSchedule}
           />
 
           <Table striped bordered hover size="sm" className="mt-2">
@@ -463,6 +486,17 @@ export default function Workflows() {
           </Modal.Footer>
         </Form>
       </Modal>
+
+      {scheduleTarget && (
+        <EditScheduleModal
+          show={true}
+          workflowId={scheduleTarget.workflow_id}
+          workflowName={scheduleTarget.name}
+          currentSchedule={scheduleTarget.schedule}
+          onHide={() => setScheduleTarget(null)}
+          onSaved={() => { setScheduleTarget(null); fetchAll(); }}
+        />
+      )}
     </Container>
   );
 }

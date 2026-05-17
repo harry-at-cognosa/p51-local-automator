@@ -54,9 +54,96 @@ interface WorkflowSummary {
   workflow_id: number;
   name: string;
   user_id: number;
+  group_id: number;
   type_id: number;
+  config: Record<string, unknown>;
   schedule: Record<string, unknown> | null;
+  enabled: boolean;
+  created_at: string;
+  latest_run_at: string | null;
+  latest_completed_run_at: string | null;
   type?: { schedulable?: boolean; long_name?: string };
+}
+
+interface GmailAccountSummary {
+  account_id: number;
+  user_id: number;
+  status?: string;
+}
+
+const PICKER_MAX = 5;
+
+// "Active" matches the same derivation used by statusBadge above. A schedule
+// is Active when enabled=true AND it's not in a past-fire/expired state.
+// We collapse all the not-yet-fired, currently-running, paused, expired,
+// and one-time-completed cases into "not Active" for picker eligibility —
+// any of those means the schedule is no longer firing forward and can be
+// safely replaced.
+function isScheduleActive(w: WorkflowSummary): boolean {
+  if (!w.schedule) return false;
+  if (!w.enabled) return false;
+  const kind = w.schedule.kind as string | undefined;
+  if (kind === "one_time") {
+    // One-time schedules become "Done/Completed/Failed" the moment they fire,
+    // surfaced via the per-workflow last_run_at presence. If no run yet, the
+    // schedule is still Active and pointing at a future at_local time.
+    return w.latest_run_at == null;
+  }
+  if (kind === "recurring") {
+    const endsOn = w.schedule.ends_on as string | undefined;
+    if (endsOn) {
+      const todayLocalIso = new Date().toISOString().slice(0, 10);
+      if (endsOn < todayLocalIso) return false; // Expired
+    }
+    return true; // recurring + enabled + not expired = Active
+  }
+  // Unknown or missing kind: legacy {hour,minute} rows fall here. The
+  // scheduler treats them as recurring daily — call that Active when enabled.
+  return true;
+}
+
+// True iff this workflow's per-user OAuth (if any) is held by `me`. Apple-Mail
+// and no-auth workflows always pass: the Mac itself or no auth is the boundary.
+function workflowAuthOk(
+  w: WorkflowSummary,
+  myAccountIds: Set<number>,
+): boolean {
+  const service = w.config.service as string | undefined;
+  const accountId = w.config.account_id as number | undefined;
+  if (service === "apple_mail" || service === "apple_calendar") return true;
+  if (accountId == null) return true; // no per-user OAuth at all
+  return myAccountIds.has(accountId);
+}
+
+// Eligible workflows are: (caller can-see-them per role) AND schedulable type
+// AND not currently Active AND (completed at least once OR never run) AND
+// caller holds whatever OAuth the workflow needs.
+function applyPickerFilters(
+  workflows: WorkflowSummary[],
+  auth: { user_id: number; group_id: number; is_groupadmin: boolean; is_manager: boolean; is_superuser: boolean },
+  myAccountIds: Set<number>,
+): WorkflowSummary[] {
+  const elevated = auth.is_groupadmin || auth.is_manager || auth.is_superuser;
+  const scoped = workflows.filter((w) =>
+    elevated ? w.group_id === auth.group_id : w.user_id === auth.user_id,
+  );
+  const eligible = scoped.filter((w) => {
+    if (w.type?.schedulable === false) return false;
+    if (isScheduleActive(w)) return false;
+    const hasCompleted = w.latest_completed_run_at != null;
+    const neverRan = w.latest_run_at == null;
+    if (!hasCompleted && !neverRan) return false; // only-failed history
+    if (!workflowAuthOk(w, myAccountIds)) return false;
+    return true;
+  });
+  // Sort: most-recent completed run desc; for never-run, fall back to
+  // created_at desc. Intermingled — one comparator handles both.
+  eligible.sort((a, b) => {
+    const aKey = a.latest_completed_run_at || a.created_at;
+    const bKey = b.latest_completed_run_at || b.created_at;
+    return bKey.localeCompare(aKey);
+  });
+  return eligible.slice(0, PICKER_MAX);
 }
 
 function formatFireTime(iso: string | null): string {
@@ -100,19 +187,19 @@ export default function Schedules() {
 
   const openPicker = () => {
     setPickerError(null);
+    setPickerWorkflows(null);
     setShowPicker(true);
-    axiosClient
-      .get<WorkflowSummary[]>("/workflows")
-      .then((res) => {
-        // Show only workflows the caller owns that are schedulable and not
-        // already scheduled. Scheduling someone else's workflow from here
-        // would be confusing; admins can still hit those via WorkflowDetail.
-        const eligible = res.data.filter(
-          (w) =>
-            w.user_id === auth.user_id &&
-            !w.schedule &&
-            (w.type?.schedulable !== false)
+    Promise.all([
+      axiosClient.get<WorkflowSummary[]>("/workflows"),
+      axiosClient.get<GmailAccountSummary[]>("/gmail/accounts").catch(() => ({ data: [] })),
+    ])
+      .then(([wfRes, gaRes]) => {
+        const myAccountIds = new Set(
+          gaRes.data
+            .filter((a) => a.user_id === auth.user_id)
+            .map((a) => a.account_id),
         );
+        const eligible = applyPickerFilters(wfRes.data, auth, myAccountIds);
         setPickerWorkflows(eligible);
       })
       .catch((e: unknown) => {
@@ -247,12 +334,19 @@ export default function Schedules() {
           <Modal.Title>Schedule which workflow?</Modal.Title>
         </Modal.Header>
         <Modal.Body>
+          <p className="text-muted small mb-3">
+            Never-run or successfully-run workflows only, five most recent.
+            To pick from any workflow you can see, use the Schedule button on the{" "}
+            <a href="/app/workflows">Workflows page</a>.
+          </p>
           {pickerError && <Alert variant="warning" className="small">{pickerError}</Alert>}
           {pickerWorkflows === null ? (
             <p className="text-muted">Loading…</p>
           ) : pickerWorkflows.length === 0 ? (
             <Alert variant="info" className="small mb-0">
-              No workflows are available to schedule. Either you don't own any schedulable workflows, or all of yours already have schedules. Create one on the <a href="/app/workflows">Workflows page</a> first.
+              No eligible workflows. A workflow appears here once you've successfully
+              run it once (or just created it and not yet tried), provided it's not
+              already on an active schedule. Use the Workflows page for the full list.
             </Alert>
           ) : (
             <Form.Group>
