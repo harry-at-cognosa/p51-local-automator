@@ -76,8 +76,8 @@ export default function TopNavBar() {
                   className="badge ms-2"
                   style={{
                     fontSize: "0.65em",
-                    backgroundColor: "var(--theme-color-600)",
-                    color: "#ffffff",
+                    backgroundColor: "var(--theme-color-200)",
+                    color: "var(--theme-color-900)",
                   }}
                 >
                   {instance_label}
