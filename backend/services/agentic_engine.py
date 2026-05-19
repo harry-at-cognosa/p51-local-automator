@@ -257,6 +257,32 @@ class AgenticEngine:
     def total_tokens_used(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
 
+    def _stage_addendum(self, stage_name: str) -> str:
+        """Per-stage user-supplied prompt fragment.
+
+        Reads workflow.config.stage_overrides[stage_name].addendum and
+        returns either the empty string (nothing to inject) or a
+        markdown-labeled block ready to concatenate onto a stage's
+        cached_context or user_prompt.
+
+        Per R2: lets a user shape any LLM-bearing stage (analyze /
+        synthesize / audit / scribe) without code changes. The existing
+        analysis_goal / processing_steps / report_structure / voice_and_
+        style fields continue to work; the addendum is *additional*
+        guidance, not a replacement.
+        """
+        cfg = self.workflow.config or {}
+        overrides = cfg.get("stage_overrides")
+        if not isinstance(overrides, dict):
+            return ""
+        spec = overrides.get(stage_name)
+        if not isinstance(spec, dict):
+            return ""
+        addendum = (spec.get("addendum") or "").strip()
+        if not addendum:
+            return ""
+        return f"\n\n## Additional guidance for this stage\n{addendum}\n"
+
     def _check_budget(self) -> None:
         """Raises TokenBudgetExceeded if the run is over its cap. Called
         before each new LLM SDK call. The check is deliberately on
@@ -647,6 +673,7 @@ class AgenticEngine:
                 f"## Goal\n{goal}\n\n"
                 f"## Processing steps\n{steps or '(none specified — use your judgment)'}\n\n"
                 f"## Profile summary\n```json\n{json.dumps(self.profile_summary, indent=2, default=str)}\n```"
+                + self._stage_addendum("analyze")
             )
             user_prompt = "Begin analysis. Call tools as needed."
 
@@ -718,8 +745,9 @@ class AgenticEngine:
                 + "\n\n"
                 f"## Profile summary (compact)\n```json\n"
                 f"{json.dumps(self.profile_summary, indent=2, default=str)[:6000]}\n"
-                f"```\n\n"
-                "Write the markdown report now."
+                f"```\n"
+                + self._stage_addendum("synthesize")
+                + "\nWrite the markdown report now."
             )
 
             client = get_client()
@@ -831,6 +859,7 @@ class AgenticEngine:
                 f"{json.dumps(self.profile_summary, indent=2, default=str)[:6000]}\n"
                 f"```\n\n"
                 f"## Draft report\n{draft_md}"
+                + self._stage_addendum("audit")
             )
             user_prompt = (
                 "Critique the draft now. Use the read-only tools to verify "
@@ -919,8 +948,9 @@ class AgenticEngine:
                 f"## Voice and style\n"
                 f"{voice_and_style or '(no profile specified — write in a clear, neutral, exec-summary tone)'}\n\n"
                 f"## Critique to address\n```json\n{critique_block}\n```\n\n"
-                f"## Draft to polish\n{draft_md}\n\n"
-                "Produce the final polished markdown report now."
+                f"## Draft to polish\n{draft_md}"
+                + self._stage_addendum("scribe")
+                + "\n\nProduce the final polished markdown report now."
             )
 
             client = get_client()
