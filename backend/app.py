@@ -5,10 +5,12 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import update
 
+from backend import __version__
 from backend.config import AUTO_START_SCHEDULER, CORS_ORIGINS
 from backend.auth.middleware import refresh_last_seen
 from backend.services.logger_service import get_logger, setup_logging
 from backend.services.scheduler_service import scheduler
+from backend.services.version_service import check_alembic_alignment
 from backend.db.seed import run_seed
 from backend.db.session import SqlAsyncSession
 from backend.db.models import WorkflowRuns
@@ -62,6 +64,8 @@ async def _reset_abandoned_runs():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    _log.info("app_version", version=__version__)
+    await check_alembic_alignment()
     await _reset_abandoned_runs()
     await run_seed()
     if AUTO_START_SCHEDULER:
@@ -76,7 +80,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Local Automator API",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
     dependencies=[Depends(refresh_last_seen)],
 )
