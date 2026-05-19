@@ -50,9 +50,9 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 
 ## Versioning
 
-- **Scheme:** CalVer `YYYY.MM.PATCH` (e.g. `2026.05.0`, `2026.05.1`, `2026.06.0`). Newer wins by string compare.
+- **Scheme:** CalVer `YYYY.MM.DD.N` (e.g. `2026.05.18.0`, `2026.05.18.1`, `2026.05.19.0`). The trailing `N` is a per-day serial that resets to 0 each new day. Date is zero-padded so the format also string-sorts correctly.
 - **Single source of truth:** `backend/__init__.py` `__version__`. `frontend/package.json` `version` is bumped in lockstep manually. FastAPI metadata, `/api/v1/system/version`, and any future UI footer read from `__version__`.
-- **Bump cadence:** bump the PATCH when pushing user-visible behavior (new feature, fix, migration). Bump the MONTH when crossing a calendar month and there's been a push. Don't bump for doc-only or test-only commits.
+- **Bump rule:** every commit on `main` that ships user-visible code or a migration gets a new version. The date portion always matches today; `N` increments per qualifying push that day. Skip the bump for doc-only, comment-only, or test-only commits. New day → `N` resets to 0.
 - **DB schema version:** Alembic revision hash. Latest defined head lives in `backend/alembic/versions/`; what's applied is in the DB's `alembic_version` table. The app logs an `alembic_revision_mismatch` warning at startup if the two diverge, and `/api/v1/system/version` returns both fields side-by-side for triage.
 - **Multi-machine deploy check:** after pulling code, run `alembic upgrade head` then restart `uvicorn`. Confirm via `curl http://localhost:8000/api/v1/system/version` — `db_revision` should equal `expected_db_revision`.
 
