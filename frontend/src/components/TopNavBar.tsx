@@ -126,8 +126,11 @@ export default function TopNavBar() {
                     style={{
                       fontSize: "0.7em",
                       backgroundColor: aligned
-                        ? "var(--theme-color-700)"
+                        ? "var(--theme-color-200)"
                         : "#b91c1c",
+                      color: aligned
+                        ? "var(--theme-color-900)"
+                        : "#ffffff",
                     }}
                   >
                     v{version.app_version}
