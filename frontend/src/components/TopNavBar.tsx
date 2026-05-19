@@ -3,7 +3,6 @@ import {
   Navbar,
   Nav,
   NavDropdown,
-  Badge,
   Container,
   OverlayTrigger,
   Tooltip,
@@ -69,12 +68,20 @@ export default function TopNavBar() {
             {instance_label && (
               <>
                 {" "}
-                <Badge
-                  className="ms-2"
-                  style={{ fontSize: "0.65em", backgroundColor: "var(--theme-color-600)" }}
+                {/* Plain <span className="badge"> — same reason as the
+                    version pill below: react-bootstrap's <Badge> defaults
+                    bg="primary" and Bootstrap's .bg-primary !important
+                    would override the theme-color background. */}
+                <span
+                  className="badge ms-2"
+                  style={{
+                    fontSize: "0.65em",
+                    backgroundColor: "var(--theme-color-600)",
+                    color: "#ffffff",
+                  }}
                 >
                   {instance_label}
-                </Badge>
+                </span>
               </>
             )}
           </Navbar.Brand>
