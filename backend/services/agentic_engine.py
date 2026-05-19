@@ -260,28 +260,49 @@ class AgenticEngine:
     def _stage_addendum(self, stage_name: str) -> str:
         """Per-stage user-supplied prompt fragment.
 
-        Reads workflow.config.stage_overrides[stage_name].addendum and
-        returns either the empty string (nothing to inject) or a
-        markdown-labeled block ready to concatenate onto a stage's
-        cached_context or user_prompt.
+        Reads workflow.config.stage_overrides — the list-of-rows shape
+        produced by the repeating_rows form widget — and returns either
+        the empty string or a markdown-labeled block ready to concatenate
+        onto a stage's cached_context or user_prompt.
 
         Per R2: lets a user shape any LLM-bearing stage (analyze /
         synthesize / audit / scribe) without code changes. The existing
         analysis_goal / processing_steps / report_structure / voice_and_
         style fields continue to work; the addendum is *additional*
         guidance, not a replacement.
+
+        The save-time validator in backend/db/schemas.py rejects:
+          - duplicate stage entries
+          - non-LLM-stage entries
+          - orphaned entries (stage not in config.stages when stages is
+            explicitly set)
+        so by the time we get here, at most one matching row exists per
+        LLM stage. We're still defensive on the read side because a
+        seed-script-inserted workflow row may not have passed the
+        validator.
         """
         cfg = self.workflow.config or {}
         overrides = cfg.get("stage_overrides")
-        if not isinstance(overrides, dict):
+        if not overrides:
             return ""
-        spec = overrides.get(stage_name)
-        if not isinstance(spec, dict):
+        rows: list[dict] = []
+        if isinstance(overrides, list):
+            rows = [r for r in overrides if isinstance(r, dict)]
+        elif isinstance(overrides, dict):
+            # Legacy dict-keyed shape (pre-form-widget; kept defensively
+            # for any hand-built fixtures that used it).
+            spec = overrides.get(stage_name)
+            if isinstance(spec, dict):
+                rows = [{"stage": stage_name, **spec}]
+        matching = [
+            (r.get("addendum") or "").strip()
+            for r in rows
+            if r.get("stage") == stage_name
+        ]
+        joined = "\n\n".join(a for a in matching if a)
+        if not joined:
             return ""
-        addendum = (spec.get("addendum") or "").strip()
-        if not addendum:
-            return ""
-        return f"\n\n## Additional guidance for this stage\n{addendum}\n"
+        return f"\n\n## Additional guidance for this stage\n{joined}\n"
 
     def _check_budget(self) -> None:
         """Raises TokenBudgetExceeded if the run is over its cap. Called

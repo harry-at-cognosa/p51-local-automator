@@ -161,6 +161,9 @@ class WorkflowTypeUpdate(BaseModel):
     enabled: bool | None = None
 
 
+_LLM_STAGES: tuple[str, ...] = ("analyze", "synthesize", "audit", "scribe")
+
+
 def _validate_stages_override(config: dict | None) -> None:
     """Reject a malformed config.stages list at save time so the failure
     surfaces immediately rather than at workflow-run time.
@@ -203,6 +206,84 @@ def _validate_stages_override(config: dict | None) -> None:
         seen.add(s)
 
 
+def _validate_stage_overrides(config: dict | None) -> None:
+    """Reject malformed / contradictory config.stage_overrides at save
+    time so problems surface in the form, not silently in the runner.
+
+    Rules (R2 cross-field validation):
+      - stage_overrides, when present, must be a list of objects (the
+        shape produced by the repeating_rows form widget).
+      - each entry must have a `stage` value that is one of the four
+        LLM-bearing stages (analyze, synthesize, audit, scribe). The
+        non-LLM stages (ingest, profile) have no prompt to extend.
+      - no duplicate stage entries. If a user wants more guidance on
+        one stage, they should consolidate into a single row rather than
+        rely on undocumented join semantics.
+      - no orphaned addenda: if config.stages is explicitly set, every
+        stage referenced in stage_overrides must be in that list. (When
+        stages is absent, the workflow runs the full six, so no orphan
+        is possible.) Rows whose addendum is blank are tolerated as
+        UI scratchpad and don't trigger the orphan check.
+
+    Imported lazily for the same reason as the sibling validator.
+    """
+    if not config:
+        return
+    raw = config.get("stage_overrides")
+    if raw is None:
+        return
+    if not isinstance(raw, list):
+        raise ValueError(
+            "config.stage_overrides must be a list of {stage, addendum} "
+            f"objects, got {type(raw).__name__}"
+        )
+    stages_field = config.get("stages")
+    effective_stages: set[str] | None = None
+    if isinstance(stages_field, list) and stages_field:
+        effective_stages = {s for s in stages_field if isinstance(s, str)}
+    seen: dict[str, int] = {}
+    for i, row in enumerate(raw):
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"config.stage_overrides row {i} must be an object, "
+                f"got {type(row).__name__}"
+            )
+        stage = row.get("stage")
+        addendum = (row.get("addendum") or "").strip() if isinstance(row.get("addendum"), str) else ""
+        # Skip blank rows (UI may emit empty starter rows).
+        if not stage and not addendum:
+            continue
+        if not isinstance(stage, str) or not stage:
+            raise ValueError(
+                f"config.stage_overrides row {i} is missing a stage name"
+            )
+        if stage not in _LLM_STAGES:
+            raise ValueError(
+                f"config.stage_overrides row {i} targets stage {stage!r}, "
+                "which is not an LLM-bearing stage. Addenda are only "
+                f"supported for: {list(_LLM_STAGES)}"
+            )
+        if stage in seen:
+            raise ValueError(
+                f"config.stage_overrides has duplicate entries for stage "
+                f"{stage!r} (rows {seen[stage]} and {i}). Consolidate the "
+                "guidance into a single row."
+            )
+        seen[stage] = i
+        if addendum and effective_stages is not None and stage not in effective_stages:
+            raise ValueError(
+                f"config.stage_overrides row {i} adds guidance for stage "
+                f"{stage!r}, but that stage is not in config.stages. "
+                "Either re-enable the stage or remove the override row."
+            )
+
+
+def _validate_workflow_config(config: dict | None) -> None:
+    """Run all save-time cross-field checks on workflow.config."""
+    _validate_stages_override(config)
+    _validate_stage_overrides(config)
+
+
 class UserWorkflowCreate(BaseModel):
     type_id: int
     name: str
@@ -225,7 +306,7 @@ class UserWorkflowCreate(BaseModel):
     @field_validator("config")
     @classmethod
     def _validate_config_stages(cls, v):
-        _validate_stages_override(v)
+        _validate_workflow_config(v)
         return v
 
 
@@ -291,7 +372,7 @@ class UserWorkflowUpdate(BaseModel):
     def _validate_config_stages(cls, v):
         if v is None:
             return v
-        _validate_stages_override(v)
+        _validate_workflow_config(v)
         return v
 
 
