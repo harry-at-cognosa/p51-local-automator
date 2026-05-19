@@ -161,6 +161,48 @@ class WorkflowTypeUpdate(BaseModel):
     enabled: bool | None = None
 
 
+def _validate_stages_override(config: dict | None) -> None:
+    """Reject a malformed config.stages list at save time so the failure
+    surfaces immediately rather than at workflow-run time.
+
+    Rules for R1 of the pipeline-configurability refactor:
+      - stages, when present, must be a non-empty list of strings.
+      - every entry must be a known stage name (one of DEFAULT_STAGES).
+      - no duplicates. Stage repetition is deferred to R3 (StageSpec).
+
+    Imported lazily so this schema module stays cheap to import.
+    """
+    if not config:
+        return
+    raw = config.get("stages")
+    if raw is None:
+        return
+    from backend.services.agentic_engine import DEFAULT_STAGES
+    valid = set(DEFAULT_STAGES)
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(
+            "config.stages must be a non-empty list of stage names, "
+            f"got {raw!r}"
+        )
+    seen: set[str] = set()
+    for s in raw:
+        if not isinstance(s, str):
+            raise ValueError(
+                f"config.stages entries must be strings, got {s!r}"
+            )
+        if s not in valid:
+            raise ValueError(
+                f"config.stages contains unknown stage {s!r}. "
+                f"Allowed: {sorted(valid)}"
+            )
+        if s in seen:
+            raise ValueError(
+                f"config.stages contains duplicate stage {s!r}. "
+                "Stage repetition is not yet supported (deferred to R3)."
+            )
+        seen.add(s)
+
+
 class UserWorkflowCreate(BaseModel):
     type_id: int
     name: str
@@ -178,6 +220,12 @@ class UserWorkflowCreate(BaseModel):
             validate_for_save(v)
         except ScheduleError as e:
             raise ValueError(str(e))
+        return v
+
+    @field_validator("config")
+    @classmethod
+    def _validate_config_stages(cls, v):
+        _validate_stages_override(v)
         return v
 
 
@@ -236,6 +284,14 @@ class UserWorkflowUpdate(BaseModel):
             validate_for_save(v)
         except ScheduleError as e:
             raise ValueError(str(e))
+        return v
+
+    @field_validator("config")
+    @classmethod
+    def _validate_config_stages(cls, v):
+        if v is None:
+            return v
+        _validate_stages_override(v)
         return v
 
 

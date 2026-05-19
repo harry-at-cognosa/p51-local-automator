@@ -1,8 +1,13 @@
 """AWF-1 runner — wires AgenticEngine into the WORKFLOW_RUNNERS dispatch.
 
 Resolves the user's inputs sandbox + the run output dir, builds a
-SkillContext, instantiates AgenticEngine, drives it through the six
-stages, and finalizes the run.
+SkillContext, instantiates AgenticEngine, drives it through the
+configured stage sequence, and finalizes the run.
+
+Per the configurable-pipeline refactor (R1): workflow.config may set a
+`stages` list to override the default six-stage AWF-1 sequence — useful
+for variants that skip audit/scribe or that only need ingest+profile+
+synthesize. When absent the engine falls back to DEFAULT_STAGES.
 """
 from __future__ import annotations
 
@@ -13,12 +18,41 @@ from backend.services import workflow_engine as engine
 from backend.services.agentic_engine import (
     AgenticEngine,
     DEFAULT_STAGE_TIMEOUT_SECONDS,
-    STAGES,
+    DEFAULT_STAGES,
 )
 from backend.services.logger_service import get_logger
 from backend.services.skills import SkillContext
 
 log = get_logger("analyze_data_collection")
+
+
+def _resolve_stages(config: dict) -> tuple[str, ...]:
+    """Resolve workflow.config.stages (list[str]) to a tuple, falling back
+    to DEFAULT_STAGES. The Pydantic validator on UserWorkflowCreate/Update
+    has already rejected unknown names and duplicates by the time we get
+    here, but we defensively re-check both — a workflow row inserted via
+    SQL (seed scripts, demo loader) won't have hit the validator."""
+    raw = config.get("stages")
+    if raw is None:
+        return DEFAULT_STAGES
+    if not isinstance(raw, list) or not raw:
+        return DEFAULT_STAGES
+    cleaned: list[str] = []
+    for s in raw:
+        if not isinstance(s, str) or s not in DEFAULT_STAGES:
+            log.warning(
+                "stages_override_invalid_entry_ignored",
+                entry=s, defaulting_to=DEFAULT_STAGES,
+            )
+            return DEFAULT_STAGES
+        if s in cleaned:
+            log.warning(
+                "stages_override_duplicate_entry_ignored",
+                entry=s, defaulting_to=DEFAULT_STAGES,
+            )
+            return DEFAULT_STAGES
+        cleaned.append(s)
+    return tuple(cleaned)
 
 
 async def run_analyze_data_collection(
@@ -28,13 +62,15 @@ async def run_analyze_data_collection(
 ) -> WorkflowRuns:
     """Entry point invoked by api.workflows._run_workflow_background.
 
-    total_steps is initialized to len(STAGES) (six). The engine bumps it
-    to the actual step count via run_all() so the UI progress bar isn't
-    pinned at 6/6 with 30 sub-step rows trailing."""
+    total_steps is initialized to len(stages) (one row per stage marker).
+    The engine bumps it to the actual step count via run_all() so the UI
+    progress bar isn't pinned at <n>/<n> with sub-step rows trailing."""
+    config = workflow.config or {}
+    stages = _resolve_stages(config)
     run = await engine.create_run(
         session,
         workflow_id=workflow.workflow_id,
-        total_steps=len(STAGES),
+        total_steps=len(stages),
         trigger=trigger,
         config=workflow.config,
     )
@@ -44,7 +80,6 @@ async def run_analyze_data_collection(
     inputs_dir = await engine.get_user_inputs_dir(
         session, workflow.group_id, workflow.user_id
     )
-    config = workflow.config or {}
     token_budget = await engine.resolve_int_setting(
         session,
         group_id=workflow.group_id,
@@ -74,6 +109,7 @@ async def run_analyze_data_collection(
         inputs_dir=inputs_dir,
         token_budget=token_budget,
         stage_timeout_seconds=stage_timeout,
+        stages=stages,
     )
 
     try:

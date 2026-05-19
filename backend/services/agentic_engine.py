@@ -157,7 +157,16 @@ def _content_blocks_to_dict(content: list[Any]) -> list[dict]:
     return out
 
 
-STAGES = ("ingest", "profile", "analyze", "synthesize", "audit", "scribe")
+# Canonical AWF-1 stage sequence. Kept as the engine's default when no
+# per-workflow override is supplied. Each name maps to a `stage_<name>`
+# method on AgenticEngine; getattr resolves the binding at run time.
+DEFAULT_STAGES: tuple[str, ...] = (
+    "ingest", "profile", "analyze", "synthesize", "audit", "scribe",
+)
+
+# Back-compat alias for any imports that referenced the old name. Safe to
+# remove once external callers are confirmed off it.
+STAGES = DEFAULT_STAGES
 
 
 class TokenBudgetExceeded(Exception):
@@ -206,6 +215,7 @@ class AgenticEngine:
         inputs_dir: str,
         token_budget: int | None = None,
         stage_timeout_seconds: int | None = DEFAULT_STAGE_TIMEOUT_SECONDS,
+        stages: tuple[str, ...] | None = None,
     ):
         self.session = session
         self.run = run
@@ -221,6 +231,11 @@ class AgenticEngine:
         self.token_budget = token_budget
         # Per-stage wall-time cap. None disables the timeout (debugging).
         self.stage_timeout_seconds = stage_timeout_seconds
+        # Per-run stage sequence. None falls back to DEFAULT_STAGES so AWF-1
+        # behavior is preserved when callers don't override. Runner shells
+        # may pass workflow.config.stages here for per-workflow ordering /
+        # skipping; see R1 of the configurable-pipeline refactor plan.
+        self.stages: tuple[str, ...] = tuple(stages) if stages else DEFAULT_STAGES
         self._step_counter = 0
         self._current_stage: str | None = None
         # Per-stage rollup state. Populated as stages run; consumed by
@@ -980,7 +995,7 @@ class AgenticEngine:
         from sqlalchemy import update as _update
         log.info("agentic_run_start", run_id=self.run.run_id, workflow_id=self.workflow.workflow_id)
         try:
-            for stage in STAGES:
+            for stage in self.stages:
                 await self._run_stage_with_timeout(stage)
         except TokenBudgetExceeded as e:
             log.info("agentic_run_budget_exceeded", run_id=self.run.run_id, used=e.used, budget=e.budget)
