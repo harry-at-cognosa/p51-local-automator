@@ -122,7 +122,13 @@ export default function TopNavBar() {
                   className="d-flex align-items-center ms-2"
                   style={{ cursor: "default" }}
                 >
-                  <Badge
+                  {/* Plain styled span instead of <Badge>: react-bootstrap's
+                      Badge defaults bg="primary", which applies .bg-primary
+                      with !important and would override the inline
+                      backgroundColor. Using just .badge gives us the pill
+                      shape without the variant background. */}
+                  <span
+                    className="badge"
                     style={{
                       fontSize: "0.7em",
                       backgroundColor: aligned
@@ -135,7 +141,7 @@ export default function TopNavBar() {
                   >
                     v{version.app_version}
                     {!aligned && " (stale)"}
-                  </Badge>
+                  </span>
                 </span>
               </OverlayTrigger>
             )}
