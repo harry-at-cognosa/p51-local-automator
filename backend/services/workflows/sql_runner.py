@@ -84,6 +84,21 @@ async def run_sql_runner(
     run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
     output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
+    sample_rows = (
+        await engine.resolve_int_setting(
+            session,
+            group_id=workflow.group_id,
+            name=engine.SETTING_SQL_LLM_SAMPLE_ROWS,
+            user_override=config.get("sql_llm_sample_rows"),
+        ) or 50
+    )
+    row_limit = await engine.resolve_int_setting(
+        session,
+        group_id=workflow.group_id,
+        name=engine.SETTING_SQL_ROW_LIMIT,
+        user_override=config.get("sql_row_limit"),
+    )  # None = no cap
+
     try:
         # ── Step 1: Execute query ─────────────────────────────
         step1 = await engine.start_step(session, run.run_id, 1, "Execute SQL query")
@@ -91,6 +106,13 @@ async def run_sql_runner(
         engine_db = create_engine(connection_string)
         with engine_db.connect() as conn:
             df = pd.read_sql(text(query), conn)
+
+        # Hard cap on returned rows when sql_row_limit is set. Applied
+        # post-query so the DB driver still fetches the full result
+        # (cheap enough at typical sizes); enforces a ceiling on what
+        # downstream artifacts and LLM context include.
+        if row_limit is not None and len(df) > row_limit:
+            df = df.head(row_limit)
 
         rows, cols = df.shape
 
@@ -108,8 +130,9 @@ async def run_sql_runner(
         # ── Step 2: Analyze with LLM ─────────────────────────
         step2 = await engine.start_step(session, run.run_id, 2, "Analyze results")
 
-        # Send first 50 rows to LLM for analysis
-        sample = df.head(50).to_string(index=False)
+        # Send sample_rows to LLM for analysis (default 50, resolved via
+        # the 3-layer chain at the top of the function).
+        sample = df.head(sample_rows).to_string(index=False)
         stats = df.describe().to_string()
 
         system = """You are a data analysis assistant. You will receive SQL query results.
@@ -137,7 +160,7 @@ Columns: {', '.join(df.columns.tolist())}
 Statistics:
 {stats}
 
-Sample data (first 50 rows):
+Sample data (first {sample_rows} rows):
 {sample}"""
 
         llm_result = llm_service.judge_structured(system, user_prompt)

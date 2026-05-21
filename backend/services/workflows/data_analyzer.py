@@ -101,6 +101,23 @@ async def run_data_analyzer(
     run = await engine.create_run(session, workflow.workflow_id, total_steps=2, trigger=trigger, config=workflow.config)
     output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
+    timeout_seconds = (
+        await engine.resolve_int_setting(
+            session,
+            group_id=workflow.group_id,
+            name=engine.SETTING_ANALYZER_TIMEOUT_SECONDS,
+            user_override=config.get("analyzer_timeout_seconds"),
+        ) or 120
+    )
+    text_truncate_chars = (
+        await engine.resolve_int_setting(
+            session,
+            group_id=workflow.group_id,
+            name=engine.SETTING_ANALYZER_TEXT_TRUNCATE_CHARS,
+            user_override=config.get("analyzer_text_truncate_chars"),
+        ) or 8000
+    )
+
     try:
         # ── Step 1: Run analysis script ───────────────────────
         step1 = await engine.start_step(session, run.run_id, 1, "Analyze data")
@@ -115,7 +132,7 @@ async def run_data_analyzer(
         if config.get("days"):
             cmd.extend(["--days", str(config["days"])])
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
 
         if result.returncode != 0:
             await engine.fail_step(session, step1, f"Script failed: {result.stderr[:500]}")
@@ -139,8 +156,8 @@ async def run_data_analyzer(
         # ── Step 2: LLM narrative analysis ───────────────────
         step2 = await engine.start_step(session, run.run_id, 2, "Analyze findings")
 
-        profile_text = _read_text_safe(os.path.join(output_dir, "step1_data_profile.md"))
-        summary_text = _read_text_safe(os.path.join(output_dir, "step3_summary_report.md"))
+        profile_text = _read_text_safe(os.path.join(output_dir, "step1_data_profile.md"), text_truncate_chars)
+        summary_text = _read_text_safe(os.path.join(output_dir, "step3_summary_report.md"), text_truncate_chars)
 
         if not profile_text and not summary_text:
             await engine.complete_step(session, step2, output_summary="Skipped: no profile or summary report found")

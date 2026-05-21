@@ -155,18 +155,19 @@ async def _fetch_account(
     cutoff: datetime,
     mailbox: str,
     run_id: int,
+    fetch_limit: int,
 ) -> list[dict]:
     """Fetch messages for one account. Returns a list — empty on
     per-account failure (caller logs the per-account error and keeps
-    going)."""
+    going). `fetch_limit` is the resolved email_fetch_limit cap."""
     service = account.get("service")
     if service == "apple_mail":
         return await mcp_client.mail_list_messages(
-            account.get("account", "iCloud"), mailbox, limit=100,
+            account.get("account", "iCloud"), mailbox, limit=fetch_limit,
         )
     if service == "gmail":
         return await gmail_client.gmail_list_messages(
-            session, account["account_id"], mailbox=mailbox, limit=100,
+            session, account["account_id"], mailbox=mailbox, limit=fetch_limit,
             workflow_id=workflow.workflow_id, run_id=run_id,
         )
     if service == "gmail_imap":
@@ -178,7 +179,7 @@ async def _fetch_account(
                 f"{(workflow.config or {}).get('storage_method', 'encrypted_db')})"
             )
         return await gmail_imap_client.imap_list_messages(
-            email, password, mailbox, cutoff, limit=100,
+            email, password, mailbox, cutoff, limit=fetch_limit,
         )
     raise ValueError(f"Unsupported email service: {service!r}")
 
@@ -203,6 +204,15 @@ async def run_email_monitor(
 
     accounts = _resolve_accounts(config)
 
+    fetch_limit = (
+        await engine.resolve_int_setting(
+            session,
+            group_id=workflow.group_id,
+            name=engine.SETTING_EMAIL_FETCH_LIMIT,
+            user_override=config.get("email_fetch_limit"),
+        ) or 100
+    )
+
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger, config=workflow.config)
     output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
 
@@ -220,7 +230,7 @@ async def run_email_monitor(
         for account in accounts:
             label = _account_label(account)
             try:
-                msgs = await _fetch_account(session, workflow, account, cutoff, mailbox, run.run_id)
+                msgs = await _fetch_account(session, workflow, account, cutoff, mailbox, run.run_id, fetch_limit)
             except Exception as exc:
                 log.warning(
                     "email_monitor_account_fetch_failed",

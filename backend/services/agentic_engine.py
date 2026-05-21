@@ -99,14 +99,20 @@ def _final_report_filename(workflow_name: str, slug_override: str | None = None)
     return f"{slug}_{yymmdd}_FinalReport.md"
 
 
-def _truncate_summary(value: Any) -> str:
-    """Compact JSON serialization for output_summary, capped at _SUMMARY_MAX_CHARS."""
+def _truncate_summary(value: Any, max_chars: int = _SUMMARY_MAX_CHARS) -> str:
+    """Compact JSON serialization for output_summary, capped at max_chars.
+
+    The default falls back to the module-level _SUMMARY_MAX_CHARS for
+    module-level call sites or unit tests; AgenticEngine method call
+    sites pass `self.step_summary_truncate_chars` so the per-workflow
+    override flows through.
+    """
     try:
         s = json.dumps(value, default=str)
     except (TypeError, ValueError):
         s = str(value)
-    if len(s) > _SUMMARY_MAX_CHARS:
-        return s[: _SUMMARY_MAX_CHARS - 16] + "...[truncated]"
+    if len(s) > max_chars:
+        return s[: max_chars - 16] + "...[truncated]"
     return s
 
 
@@ -216,6 +222,10 @@ class AgenticEngine:
         token_budget: int | None = None,
         stage_timeout_seconds: int | None = DEFAULT_STAGE_TIMEOUT_SECONDS,
         stages: tuple[str, ...] | None = None,
+        analyze_max_agent_turns: int = MAX_AGENT_TURNS,
+        audit_max_agent_turns: int = 12,
+        llm_max_tokens: int = 4096,
+        step_summary_truncate_chars: int = _SUMMARY_MAX_CHARS,
     ):
         self.session = session
         self.run = run
@@ -236,6 +246,14 @@ class AgenticEngine:
         # may pass workflow.config.stages here for per-workflow ordering /
         # skipping; see R1 of the configurable-pipeline refactor plan.
         self.stages: tuple[str, ...] = tuple(stages) if stages else DEFAULT_STAGES
+        # Agent-loop turn caps + per-call max_tokens + step-summary truncate.
+        # Resolved by the runner shell via resolve_int_setting() (3-layer
+        # chain). The absolute ceilings here are runaway-cost guards: a user
+        # cannot exceed them via api_settings or config.
+        self.analyze_max_agent_turns = min(analyze_max_agent_turns, engine.ABS_MAX_AGENT_TURNS)
+        self.audit_max_agent_turns = min(audit_max_agent_turns, engine.ABS_MAX_AGENT_TURNS)
+        self.llm_max_tokens = min(llm_max_tokens, engine.ABS_MAX_LLM_TOKENS)
+        self.step_summary_truncate_chars = step_summary_truncate_chars
         self._step_counter = 0
         self._current_stage: str | None = None
         # Per-stage rollup state. Populated as stages run; consumed by
@@ -256,6 +274,13 @@ class AgenticEngine:
     @property
     def total_tokens_used(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
+
+    def _summarize(self, value: Any) -> str:
+        """Wrap the module-level _truncate_summary with the instance's
+        configurable cap (step_summary_truncate_chars). All in-class
+        callers use this; the module-level helper retains its default
+        for any external caller / unit test."""
+        return _truncate_summary(value, self.step_summary_truncate_chars)
 
     def _stage_addendum(self, stage_name: str) -> str:
         """Per-stage user-supplied prompt fragment.
@@ -363,7 +388,7 @@ class AgenticEngine:
         try:
             result = await skill.run(self.ctx, **kwargs)
             await engine.complete_step(
-                self.session, step, output_summary=_truncate_summary(result)
+                self.session, step, output_summary=self._summarize(result)
             )
             await self._maybe_record_artifact(step.step_id, skill_name, result)
             return result
@@ -376,7 +401,7 @@ class AgenticEngine:
                     await engine.complete_step(
                         self.session,
                         step,
-                        output_summary=_truncate_summary(result) + " [recovered after retry]",
+                        output_summary=self._summarize(result) + " [recovered after retry]",
                     )
                     return result
                 except Exception as e2:  # noqa: BLE001
@@ -528,7 +553,7 @@ class AgenticEngine:
         await engine.complete_step(
             self.session,
             step,
-            output_summary=_truncate_summary(summary_obj),
+            output_summary=self._summarize(summary_obj),
             llm_tokens=total_tokens,
         )
         return step
@@ -704,6 +729,8 @@ class AgenticEngine:
                 cached_context=cached_context,
                 user_prompt=user_prompt,
                 tool_names=ANALYZE_TOOL_NAMES,
+                max_tokens=self.llm_max_tokens,
+                max_turns=self.analyze_max_agent_turns,
             )
 
             findings = _extract_trailing_json(text)
@@ -711,7 +738,7 @@ class AgenticEngine:
                 self.analyze_findings = list(findings.get("findings") or [])
             await self._stage_marker_complete(
                 marker,
-                summary=_truncate_summary({
+                summary=self._summarize({
                     "tokens_used": tokens,
                     "n_findings": len(self.analyze_findings),
                     "raw_tail": text[-500:],
@@ -777,7 +804,7 @@ class AgenticEngine:
             # stage rather than using _run_agent_loop (no tools here).
             response = client.messages.create(
                 model=DEFAULT_REASONING_MODEL,
-                max_tokens=4096,
+                max_tokens=self.llm_max_tokens,
                 system=[{
                     "type": "text",
                     "text": system,
@@ -823,7 +850,7 @@ class AgenticEngine:
             self.draft_report_path = artifact["path"] if artifact else None
             await self._stage_marker_complete(
                 marker,
-                summary=_truncate_summary({
+                summary=self._summarize({
                     "draft_path": self.draft_report_path,
                     "tokens": int(usage["input_tokens"]) + int(usage["output_tokens"]),
                     "char_count": len(draft_md),
@@ -893,7 +920,8 @@ class AgenticEngine:
                 cached_context=cached_context,
                 user_prompt=user_prompt,
                 tool_names=AUDIT_TOOL_NAMES,
-                max_turns=12,  # tighter than analyze; audit shouldn't sprawl
+                max_tokens=self.llm_max_tokens,
+                max_turns=self.audit_max_agent_turns,
             )
 
             critique = _extract_trailing_json(text) or {}
@@ -913,7 +941,7 @@ class AgenticEngine:
 
             await self._stage_marker_complete(
                 marker,
-                summary=_truncate_summary({
+                summary=self._summarize({
                     "tokens_used": tokens,
                     "weak_claims": len(self.audit_critique["weak_claims"]),
                     "overlooked_angles": len(self.audit_critique["overlooked_angles"]),
@@ -977,7 +1005,7 @@ class AgenticEngine:
             client = get_client()
             response = client.messages.create(
                 model=DEFAULT_REASONING_MODEL,
-                max_tokens=4096,
+                max_tokens=self.llm_max_tokens,
                 system=[{
                     "type": "text",
                     "text": system,
@@ -1020,7 +1048,7 @@ class AgenticEngine:
 
             await self._stage_marker_complete(
                 marker,
-                summary=_truncate_summary({
+                summary=self._summarize({
                     "final_path": self.final_report_path,
                     "tokens": int(usage["input_tokens"]) + int(usage["output_tokens"]),
                     "char_count": len(polished),

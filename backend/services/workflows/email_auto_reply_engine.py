@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import EmailAutoReplyLog, GmailAccounts, UserWorkflows
 from backend.services import gmail_client, llm_service, mcp_client
+from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
 
 log = get_logger("email_auto_reply")
@@ -390,7 +391,6 @@ async def _already_handled_ids(
 async def find_and_generate_candidates(
     session: AsyncSession,
     workflow: UserWorkflows,
-    max_candidates: int = 20,
 ) -> CandidateBatch:
     """Fetch, filter, group-by-to_address, pick latest-per-group, LLM-draft.
 
@@ -420,9 +420,28 @@ async def find_and_generate_candidates(
     body_email_field = (config.get("body_email_field") or "").strip()
     signature = config.get("signature") or ""
     tone = config.get("tone") or "warm and professional"
-    fetch_limit = int(config.get("fetch_limit") or 50)
     mailbox = config.get("mailbox", "INBOX")
     account_label = await _resolve_account_label(session, workflow)
+
+    # Resolved via the 3-layer chain. `fetch_limit` (legacy Types 5/6
+    # config key) is honored as a user override for back-compat; the
+    # new shared `email_fetch_limit` key wins when both are present.
+    fetch_limit = (
+        await engine.resolve_int_setting(
+            session,
+            group_id=workflow.group_id,
+            name=engine.SETTING_EMAIL_FETCH_LIMIT,
+            user_override=config.get("email_fetch_limit") or config.get("fetch_limit"),
+        ) or 50
+    )
+    max_candidates = (
+        await engine.resolve_int_setting(
+            session,
+            group_id=workflow.group_id,
+            name=engine.SETTING_REPLY_MAX_CANDIDATES,
+            user_override=config.get("reply_max_candidates"),
+        ) or 20
+    )
 
     batch = CandidateBatch()
 

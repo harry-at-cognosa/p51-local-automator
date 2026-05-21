@@ -99,6 +99,27 @@ async def run_analyze_data_collection(
     if stage_timeout is None:
         stage_timeout = DEFAULT_STAGE_TIMEOUT_SECONDS
 
+    analyze_max_turns = await engine.resolve_int_setting(
+        session, group_id=workflow.group_id,
+        name=engine.SETTING_ANALYZE_MAX_AGENT_TURNS,
+        user_override=config.get("analyze_max_agent_turns"),
+    ) or 25
+    audit_max_turns = await engine.resolve_int_setting(
+        session, group_id=workflow.group_id,
+        name=engine.SETTING_AUDIT_MAX_AGENT_TURNS,
+        user_override=config.get("audit_max_agent_turns"),
+    ) or 12
+    llm_max_tokens = await engine.resolve_int_setting(
+        session, group_id=workflow.group_id,
+        name=engine.SETTING_LLM_MAX_TOKENS,
+        user_override=config.get("llm_max_tokens"),
+    ) or 4096
+    step_summary_truncate = await engine.resolve_int_setting(
+        session, group_id=workflow.group_id,
+        name=engine.SETTING_STEP_SUMMARY_TRUNCATE_CHARS,
+        user_override=config.get("step_summary_truncate_chars"),
+    ) or 2000
+
     ctx = SkillContext(run_id=run.run_id, artifacts_dir=output_dir)
 
     awf = AgenticEngine(
@@ -110,6 +131,10 @@ async def run_analyze_data_collection(
         token_budget=token_budget,
         stage_timeout_seconds=stage_timeout,
         stages=stages,
+        analyze_max_agent_turns=analyze_max_turns,
+        audit_max_agent_turns=audit_max_turns,
+        llm_max_tokens=llm_max_tokens,
+        step_summary_truncate_chars=step_summary_truncate,
     )
 
     try:
