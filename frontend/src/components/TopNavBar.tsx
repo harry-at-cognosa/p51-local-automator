@@ -96,6 +96,11 @@ export default function TopNavBar() {
             <LinkContainer to="/app/workflows">
               <Nav.Link>Workflows</Nav.Link>
             </LinkContainer>
+            <NavDropdown title="Ad-hoc Workflows" id="adhoc-dropdown">
+              <LinkContainer to="/app/ad-hoc/email-topic-monitor">
+                <NavDropdown.Item>Email Topic Monitor</NavDropdown.Item>
+              </LinkContainer>
+            </NavDropdown>
             {version && (
               <OverlayTrigger
                 placement="bottom"
