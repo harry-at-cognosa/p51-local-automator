@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services import mcp_client
 from backend.services import gmail_client
+from backend.services import gmail_imap_client
+from backend.services import gmail_password_store
 from backend.services import llm_service
 from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
@@ -99,23 +101,25 @@ def parse_mail_date(date_str: str) -> datetime | None:
         return None
 
 
-async def run_email_monitor(
-    session: AsyncSession,
-    workflow: UserWorkflows,
-    trigger: str = "manual",
-) -> WorkflowRuns:
-    """Execute the full email monitoring pipeline."""
-    config = workflow.config or {}
+def _resolve_accounts(config: dict) -> list[dict]:
+    """Return a normalized list of account dicts to fetch from.
+
+    The ad-hoc path stores multiple accounts as `config.accounts = [{service, ...}, ...]`.
+    Legacy Type 1 workflows store a single account at the top level
+    (`service`, `account` or `account_id`). Translate both into the same
+    list-of-dicts shape so the rest of the runner is account-agnostic.
+    """
+    raw = config.get("accounts")
+    if isinstance(raw, list) and raw:
+        out: list[dict] = []
+        for entry in raw:
+            if isinstance(entry, dict) and isinstance(entry.get("service"), str):
+                out.append(entry)
+        if out:
+            return out
     service = config.get("service", "apple_mail")
-    mailbox = config.get("mailbox", "INBOX")
-    period = config.get("period", "last 7 days")
-    topics = config.get("topics") or DEFAULT_TOPICS
-    scope = config.get("scope", "")
-
-    if service not in ("apple_mail", "gmail"):
-        raise ValueError(f"Unsupported email service: {service!r}")
-
-    # Service-specific identifier for the source-account label in summaries.
+    if service == "apple_mail":
+        return [{"service": "apple_mail", "account": config.get("account", "iCloud")}]
     if service == "gmail":
         account_id = config.get("account_id")
         if not isinstance(account_id, int):
@@ -123,10 +127,81 @@ async def run_email_monitor(
                 "Gmail-flavored email_monitor needs an integer account_id "
                 "(the GmailAccounts.id of a connected account)."
             )
-        source_label = f"gmail#{account_id}"
-    else:
-        account = config.get("account", "iCloud")
-        source_label = f"apple_mail/{account}"
+        return [{"service": "gmail", "account_id": account_id}]
+    if service == "gmail_imap":
+        email = config.get("email")
+        if not isinstance(email, str) or not email:
+            raise ValueError("gmail_imap service needs an email address.")
+        return [{"service": "gmail_imap", "email": email}]
+    raise ValueError(f"Unsupported email service: {service!r}")
+
+
+def _account_label(account: dict) -> str:
+    """Stable human-readable label for run summaries / per-message tags."""
+    service = account.get("service")
+    if service == "apple_mail":
+        return f"apple_mail/{account.get('account', 'iCloud')}"
+    if service == "gmail":
+        return f"gmail#{account.get('account_id', '?')}"
+    if service == "gmail_imap":
+        return f"gmail_imap/{account.get('email', '?')}"
+    return service or "unknown"
+
+
+async def _fetch_account(
+    session: AsyncSession,
+    workflow: UserWorkflows,
+    account: dict,
+    cutoff: datetime,
+    mailbox: str,
+    run_id: int,
+) -> list[dict]:
+    """Fetch messages for one account. Returns a list — empty on
+    per-account failure (caller logs the per-account error and keeps
+    going)."""
+    service = account.get("service")
+    if service == "apple_mail":
+        return await mcp_client.mail_list_messages(
+            account.get("account", "iCloud"), mailbox, limit=100,
+        )
+    if service == "gmail":
+        return await gmail_client.gmail_list_messages(
+            session, account["account_id"], mailbox=mailbox, limit=100,
+            workflow_id=workflow.workflow_id, run_id=run_id,
+        )
+    if service == "gmail_imap":
+        email = account["email"]
+        password = gmail_password_store.get_app_password(workflow, email)
+        if not password:
+            raise RuntimeError(
+                f"No app password stored for {email} (storage_method="
+                f"{(workflow.config or {}).get('storage_method', 'encrypted_db')})"
+            )
+        return await gmail_imap_client.imap_list_messages(
+            email, password, mailbox, cutoff, limit=100,
+        )
+    raise ValueError(f"Unsupported email service: {service!r}")
+
+
+async def run_email_monitor(
+    session: AsyncSession,
+    workflow: UserWorkflows,
+    trigger: str = "manual",
+) -> WorkflowRuns:
+    """Execute the full email monitoring pipeline.
+
+    Supports multi-account configs via config.accounts (added for the
+    Ad-hoc Email Topic Monitor — service value "gmail_imap" via App
+    Passwords + IMAP). Legacy single-account configs (service/account
+    /account_id at the top level) continue to work via _resolve_accounts.
+    """
+    config = workflow.config or {}
+    mailbox = config.get("mailbox", "INBOX")
+    period = config.get("period", "last 7 days")
+    topics = config.get("topics") or DEFAULT_TOPICS
+    scope = config.get("scope", "")
+
+    accounts = _resolve_accounts(config)
 
     run = await engine.create_run(session, workflow.workflow_id, total_steps=3, trigger=trigger, config=workflow.config)
     output_dir = await engine.get_run_output_dir(session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id)
@@ -136,23 +211,44 @@ async def run_email_monitor(
         step1 = await engine.start_step(session, run.run_id, 1, "Fetch emails")
 
         cutoff = parse_period(period)
-        if service == "gmail":
-            messages = await gmail_client.gmail_list_messages(
-                session, account_id, mailbox=mailbox, limit=100,
-                workflow_id=workflow.workflow_id, run_id=run.run_id,
-            )
-        else:
-            messages = await mcp_client.mail_list_messages(account, mailbox, limit=100)
+        # Per-account fetch with graceful degradation: one failed account
+        # logs an error and contributes zero messages, but doesn't abort
+        # the run. Other accounts' messages still flow through.
+        all_messages: list[dict] = []
+        per_account_summaries: list[str] = []
+        per_account_errors: list[str] = []
+        for account in accounts:
+            label = _account_label(account)
+            try:
+                msgs = await _fetch_account(session, workflow, account, cutoff, mailbox, run.run_id)
+            except Exception as exc:
+                log.warning(
+                    "email_monitor_account_fetch_failed",
+                    run_id=run.run_id, account=label, error=str(exc),
+                )
+                per_account_errors.append(f"{label}: {exc}")
+                continue
+            # Tag each message with its originating account so downstream
+            # categorization output identifies the source.
+            for m in msgs:
+                m["source_account"] = label
+            all_messages.extend(msgs)
+            per_account_summaries.append(f"{label}={len(msgs)}")
 
         # Filter by date
         filtered = []
-        for msg in messages:
+        for msg in all_messages:
             msg_date = parse_mail_date(msg.get("date", ""))
             if msg_date and msg_date >= cutoff:
                 filtered.append(msg)
 
         if not filtered:
-            await engine.complete_step(session, step1, output_summary=f"No emails found in {period}")
+            summary = (
+                f"No emails found in {period} across {len(accounts)} account(s)."
+            )
+            if per_account_errors:
+                summary += f" Errors: {'; '.join(per_account_errors)}"
+            await engine.complete_step(session, step1, output_summary=summary)
             await engine.complete_run(session, run)
             return run
 
@@ -165,12 +261,16 @@ async def run_email_monitor(
                 "subject": msg.get("subject", ""),
                 "date": msg.get("date", ""),
                 "snippet": msg.get("subject", ""),  # Use subject as snippet for now
+                "source_account": msg.get("source_account", ""),
             })
 
-        await engine.complete_step(
-            session, step1,
-            output_summary=f"Fetched {len(enriched)} emails from {source_label}/{mailbox} ({period})",
+        summary = (
+            f"Fetched {len(enriched)} emails from {len(accounts)} account(s) "
+            f"({', '.join(per_account_summaries)}) — {period}, mailbox {mailbox}"
         )
+        if per_account_errors:
+            summary += f". Per-account errors: {'; '.join(per_account_errors)}"
+        await engine.complete_step(session, step1, output_summary=summary)
 
         # ── Step 2: Categorize with LLM ──────────────────────
         step2 = await engine.start_step(session, run.run_id, 2, "Categorize emails")
@@ -199,6 +299,7 @@ async def run_email_monitor(
                 "thread_id": str(email.get("id", "")),
                 "urgent": cat.get("urgent", False),
                 "urgency_reason": cat.get("urgency_reason", ""),
+                "source_account": email.get("source_account", ""),
             })
 
         # Save JSON
