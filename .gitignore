@@ -29,3 +29,8 @@ data/
 
 # Microsoft Office lock files (created while a document is open, removed on close)
 ~$*
+
+# Ad-hoc Email Topic Monitor — plaintext app-password file (alternate
+# storage backend; per-machine, never source-controlled).
+.gmailpasswords.json
+.gmailpasswords.json.tmp
