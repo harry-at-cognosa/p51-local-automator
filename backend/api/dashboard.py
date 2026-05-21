@@ -54,6 +54,7 @@ class DashboardRecentRun(BaseModel):
     type_long_name: str
     status: str
     started_at: datetime
+    is_adhoc: bool = False
 
     class Config:
         from_attributes = True
@@ -66,9 +67,13 @@ async def get_stats(
 ):
     scope = _run_scope_filter(user)
 
+    # Ad-hoc rows aren't user-managed in the conventional sense — they're
+    # fluid per-user state behind the Ad-hoc Workflows menu. Don't count
+    # them in "total_workflows".
     workflows_count = await session.scalar(
         select(func.count()).select_from(UserWorkflows)
         .where(UserWorkflows.deleted == 0)
+        .where(UserWorkflows.is_adhoc.is_(False))
         .where(*scope)
     ) or 0
 
@@ -137,6 +142,7 @@ async def recent_runs(
                 type_long_name=wf_type.long_name,
                 status=run.status,
                 started_at=run.started_at,
+                is_adhoc=workflow.is_adhoc,
             )
         )
     return rows

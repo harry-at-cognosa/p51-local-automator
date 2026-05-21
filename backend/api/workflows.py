@@ -203,9 +203,14 @@ async def admin_update_workflow_type(
 
 @router_workflows.get("/workflows", response_model=list[UserWorkflowListRead])
 async def list_workflows(
+    include_adhoc: bool = False,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
 ):
+    # Ad-hoc rows are hidden from the main Workflows list. Superuser may
+    # opt in with ?include_adhoc=true to see them for triage. Non-superusers
+    # are silently forced to false.
+    show_adhoc = include_adhoc and user.is_superuser
     # DISTINCT ON (workflow_id) latest run per workflow. Archived runs are
     # excluded so a workflow whose only recent runs were archived shows its
     # most recent VISIBLE run (or none if all are archived).
@@ -275,6 +280,7 @@ async def list_workflows(
         )
         .where(UserWorkflows.deleted == 0)
         .where(*_run_scope_filter(user))
+        .where(*([] if show_adhoc else [UserWorkflows.is_adhoc.is_(False)]))
         .order_by(UserWorkflows.created_at.desc())
     )
 
@@ -302,6 +308,7 @@ async def list_workflows(
                 config=workflow.config or {},
                 schedule=workflow.schedule,
                 enabled=workflow.enabled,
+                is_adhoc=workflow.is_adhoc,
                 last_run_at=workflow.last_run_at,
                 created_at=workflow.created_at,
                 type=WorkflowTypeRead.model_validate(workflow.workflow_type),
@@ -355,11 +362,14 @@ async def bulk_delete_workflows(
     if not body.workflow_ids:
         return {"deleted_count": 0}
 
+    # Ad-hoc rows are not deletable via the main bulk-delete endpoint;
+    # they're managed exclusively by /api/v1/ad-hoc/.../clear.
     result = await session.execute(
         update(UserWorkflows)
         .where(UserWorkflows.workflow_id.in_(body.workflow_ids))
         .where(UserWorkflows.group_id == user.group_id)
         .where(UserWorkflows.deleted == 0)
+        .where(UserWorkflows.is_adhoc.is_(False))
         .values(deleted=1)
     )
     await session.commit()
@@ -369,18 +379,48 @@ async def bulk_delete_workflows(
 # ── Single-workflow routes ───────────────────────────────────
 
 
-async def _get_active_workflow(session: AsyncSession, workflow_id: int, user: User) -> UserWorkflows:
+def _scope_blocks(workflow: UserWorkflows | None, scope: str) -> bool:
+    """Return True when the given scope should hide the workflow.
+
+    scope = "main"  → reject ad-hoc rows (the default; the main app stays
+                      ad-hoc-free unless callers opt in).
+    scope = "adhoc" → reject non-ad-hoc rows (used by the /ad-hoc/
+                      endpoints).
+    scope = "any"   → never block by adhoc flag (escape hatch for
+                      cross-scope tools; use sparingly).
+    """
+    if workflow is None or scope == "any":
+        return False
+    if scope == "main":
+        return bool(workflow.is_adhoc)
+    if scope == "adhoc":
+        return not workflow.is_adhoc
+    return False
+
+
+async def _get_active_workflow(
+    session: AsyncSession,
+    workflow_id: int,
+    user: User,
+    scope: str = "main",
+) -> UserWorkflows:
     workflow = await session.get(UserWorkflows, workflow_id)
     if (
         not workflow
         or workflow.group_id != user.group_id
         or workflow.deleted != 0
+        or _scope_blocks(workflow, scope)
     ):
         raise HTTPException(status_code=404, detail="Workflow not found")
     return workflow
 
 
-async def _load_workflow_with_type(session: AsyncSession, workflow_id: int, user: User) -> UserWorkflows:
+async def _load_workflow_with_type(
+    session: AsyncSession,
+    workflow_id: int,
+    user: User,
+    scope: str = "main",
+) -> UserWorkflows:
     """Same access guard as _get_active_workflow but eager-loads the type+category."""
     result = await session.execute(
         select(UserWorkflows)
@@ -392,6 +432,7 @@ async def _load_workflow_with_type(session: AsyncSession, workflow_id: int, user
         not workflow
         or workflow.group_id != user.group_id
         or workflow.deleted != 0
+        or _scope_blocks(workflow, scope)
     ):
         raise HTTPException(status_code=404, detail="Workflow not found")
     return workflow
@@ -408,6 +449,7 @@ def _serialize_workflow(workflow: UserWorkflows) -> UserWorkflowRead:
         config=workflow.config,
         schedule=workflow.schedule,
         enabled=workflow.enabled,
+        is_adhoc=workflow.is_adhoc,
         last_run_at=workflow.last_run_at,
         created_at=workflow.created_at,
         type=WorkflowTypeRead.model_validate(workflow.workflow_type) if workflow.workflow_type else None,
@@ -513,6 +555,7 @@ async def list_schedules(
         .where(
             UserWorkflows.deleted == 0,
             UserWorkflows.schedule.isnot(None),
+            UserWorkflows.is_adhoc.is_(False),
         )
     )
     for clause in scope:

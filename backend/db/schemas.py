@@ -319,6 +319,7 @@ class UserWorkflowRead(BaseModel):
     config: dict
     schedule: dict | None
     enabled: bool
+    is_adhoc: bool = False
     last_run_at: datetime | None
     created_at: datetime
     type: WorkflowTypeRead | None = None
@@ -337,6 +338,7 @@ class UserWorkflowListRead(BaseModel):
     config: dict
     schedule: dict | None
     enabled: bool
+    is_adhoc: bool = False
     last_run_at: datetime | None
     created_at: datetime
     type: WorkflowTypeRead
