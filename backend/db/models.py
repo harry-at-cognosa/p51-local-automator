@@ -161,6 +161,7 @@ class UserWorkflows(Base):
     schedule: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
     deleted: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    is_adhoc: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
