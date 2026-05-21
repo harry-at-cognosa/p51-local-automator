@@ -350,7 +350,7 @@ export default function AdHocEmailMonitor() {
       </Card>
 
       <Card className="mb-3">
-        <Card.Header>Credential storage</Card.Header>
+        <Card.Header>Credential storage (not required for Apple Mail accounts)</Card.Header>
         <Card.Body>
           <Form.Check
             type="radio"
