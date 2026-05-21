@@ -29,6 +29,28 @@ log = get_logger("workflow_engine")
 SETTING_FILE_SYSTEM_ROOT = "file_system_root"
 SETTING_TOKEN_BUDGET = "token_budget"
 
+# Per-workflow-type numeric limits, all resolved via resolve_int_setting()
+# with the 3-layer chain (workflow.config → group_settings → api_settings →
+# hardcoded default). Defaults are seeded in api_settings by the migration
+# `<rev>_seed_workflow_limit_defaults.py`. See CLAUDE.md "Workflow limits"
+# for the per-key documentation.
+SETTING_EMAIL_FETCH_LIMIT             = "email_fetch_limit"             # Types 1, 5, 6
+SETTING_ANALYZER_TIMEOUT_SECONDS      = "analyzer_timeout_seconds"      # Type 2
+SETTING_ANALYZER_LLM_SAMPLE_ROWS      = "analyzer_llm_sample_rows"      # Type 2
+SETTING_ANALYZER_TEXT_TRUNCATE_CHARS  = "analyzer_text_truncate_chars"  # Type 2
+SETTING_SQL_LLM_SAMPLE_ROWS           = "sql_llm_sample_rows"           # Type 4
+SETTING_SQL_ROW_LIMIT                 = "sql_row_limit"                 # Type 4 — None default = no cap
+SETTING_REPLY_MAX_CANDIDATES          = "reply_max_candidates"          # Types 5, 6
+SETTING_ANALYZE_MAX_AGENT_TURNS       = "analyze_max_agent_turns"       # Type 7
+SETTING_AUDIT_MAX_AGENT_TURNS         = "audit_max_agent_turns"         # Type 7
+SETTING_LLM_MAX_TOKENS                = "llm_max_tokens"                # Type 7
+SETTING_STEP_SUMMARY_TRUNCATE_CHARS   = "step_summary_truncate_chars"   # Type 7
+
+# Absolute ceilings — operator cannot exceed via api_settings. Hardcoded
+# runaway-cost guards. Bump only by editing source.
+ABS_MAX_AGENT_TURNS = 100
+ABS_MAX_LLM_TOKENS  = 16384
+
 
 class FileSystemRootError(RuntimeError):
     """Raised when file_system_root is misconfigured or unwritable.

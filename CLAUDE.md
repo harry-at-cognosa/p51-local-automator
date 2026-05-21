@@ -48,6 +48,28 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 - Migrations via Alembic: `alembic upgrade head`
 - Seed on startup (idempotent)
 
+## Workflow limits
+
+All numeric workflow caps resolve through `resolve_int_setting()` in `backend/services/workflow_engine.py` with a 3-layer chain: `workflow.config[<key>]` → `group_settings(group_id, <key>)` → `api_settings(<key>)` → runner-local fallback. Each key is exported as a `SETTING_*` constant in the same file. Defaults are seeded by Alembic migration `e1f3b2a8d6c5_seed_workflow_limit_defaults.py`.
+
+| Setting key | Default | Used by | Meaning |
+|---|---|---|---|
+| `email_fetch_limit` | 100 | Types 1, 5, 6 | Max messages fetched per account per run |
+| `analyzer_timeout_seconds` | 120 | Type 2 | Subprocess timeout for the analyzer script |
+| `analyzer_llm_sample_rows` | 50 | Type 2 | Rows handed to the LLM for narrative |
+| `analyzer_text_truncate_chars` | 8000 | Type 2 | Profile + summary text caps before LLM |
+| `sql_llm_sample_rows` | 50 | Type 4 | Rows handed to the LLM for narrative |
+| `sql_row_limit` | (none) | Type 4 | Hard cap on total result rows; blank = no cap |
+| `reply_max_candidates` | 20 | Types 5, 6 | Max replies drafted per run |
+| `analyze_max_agent_turns` | 25 | Type 7 | Agent loop turns in the analyze stage |
+| `audit_max_agent_turns` | 12 | Type 7 | Agent loop turns in the audit stage |
+| `llm_max_tokens` | 4096 | Type 7 | Per-call max_tokens for every LLM-bearing stage |
+| `step_summary_truncate_chars` | 2000 | Type 7 | Step output truncation |
+
+**Absolute ceilings** live in code as runaway-cost guards and cannot be exceeded via api_settings: `ABS_MAX_AGENT_TURNS = 100`, `ABS_MAX_LLM_TOKENS = 16384` in `workflow_engine.py`. Values above these are silently clamped at run time. Bump only by editing source.
+
+**Operator tuning:** superuser edits `api_settings` defaults at `/app/admin/settings`; groupadmin sets per-group overrides at `/app/admin/group-settings`; user sets per-workflow overrides via the "Advanced" section on each workflow type's config form.
+
 ## Versioning
 
 - **Scheme:** CalVer `YYYY.MM.DD.N` (e.g. `2026.05.18.0`, `2026.05.18.1`, `2026.05.19.0`). The trailing `N` is a per-day serial that resets to 0 each new day. Date is zero-padded so the format also string-sorts correctly.
