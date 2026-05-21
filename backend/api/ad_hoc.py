@@ -1,9 +1,10 @@
-"""Ad-hoc Workflows — Email Topic Monitor endpoints.
+"""Ad-hoc Workflows — Email Topic Monitor endpoints + cross-type runs history.
 
-A thin UX shell over Type 1 (Email Topic Monitor). Each user has at
-most one hidden user_workflows row per type_id (flagged is_adhoc=true);
-the row is auto-created on first GET. Saves overwrite; "Clear" wipes
-both the row's config and any matching plaintext-file entries.
+A thin UX shell over the Email Topic Monitor runner (Type 1). Each user
+has at most one hidden user_workflows row per ad-hoc type_id (flagged
+is_adhoc=true); the row is auto-created on first GET. Saves overwrite;
+"Clear" wipes both the row's config and any matching plaintext-file
+entries.
 
 Endpoints:
     GET    /ad-hoc/email-topic-monitor       → fetch / auto-create
@@ -11,6 +12,7 @@ Endpoints:
     POST   /ad-hoc/email-topic-monitor/run   → save + trigger run
     POST   /ad-hoc/email-topic-monitor/test  → validate credentials
     POST   /ad-hoc/email-topic-monitor/clear → wipe config + creds
+    GET    /ad-hoc/runs                       → cross-type run history
 
 Credential redaction: GET never returns plaintext app passwords. For
 encrypted_db rows, each accounts[].app_password_enc is replaced with
@@ -26,15 +28,23 @@ verbatim to ad-hoc runs.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.api.dashboard import _run_scope_filter
 from backend.auth.users import current_active_user
-from backend.db.models import User, UserWorkflows
+from backend.db.models import (
+    User,
+    UserWorkflows,
+    WorkflowArtifacts,
+    WorkflowRuns,
+    WorkflowTypes,
+)
 from backend.db.session import async_get_session
 from backend.services import gmail_imap_client, gmail_password_store
 from backend.services.logger_service import get_logger
@@ -434,3 +444,89 @@ async def clear_email_topic_monitor(
     await session.commit()
     await session.refresh(workflow)
     return _serialize_read(workflow)
+
+
+# ── Cross-type ad-hoc run history ───────────────────────────────────
+
+
+class AdHocRunListItem(BaseModel):
+    run_id: int
+    workflow_id: int
+    workflow_name: str
+    type_id: int
+    type_long_name: str
+    status: str
+    current_step: int
+    total_steps: int
+    trigger: str
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    artifact_count: int = 0
+
+
+# Mirrors the cap on the existing per-workflow runs list endpoint.
+ADHOC_RUNS_LIMIT = 50
+
+
+@router_ad_hoc.get(
+    "/runs",
+    response_model=list[AdHocRunListItem],
+)
+async def list_adhoc_runs(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(async_get_session),
+):
+    """Read-only cross-type history of ad-hoc runs visible to the
+    caller under the standard _run_scope_filter rule (superuser → all,
+    groupadmin/manager → group, everyone else → own).
+
+    Hides archived runs unconditionally. The list-Workflows
+    `?include_adhoc=true` superuser opt-in pattern doesn't apply here
+    — this endpoint is FOR ad-hoc rows by construction.
+    """
+    artifact_counts = (
+        select(
+            WorkflowArtifacts.run_id,
+            func.count(WorkflowArtifacts.artifact_id).label("artifact_count"),
+        )
+        .group_by(WorkflowArtifacts.run_id)
+        .subquery()
+    )
+
+    q = (
+        select(
+            WorkflowRuns,
+            UserWorkflows,
+            WorkflowTypes,
+            artifact_counts.c.artifact_count,
+        )
+        .join(UserWorkflows, UserWorkflows.workflow_id == WorkflowRuns.workflow_id)
+        .join(WorkflowTypes, WorkflowTypes.type_id == UserWorkflows.type_id)
+        .outerjoin(artifact_counts, artifact_counts.c.run_id == WorkflowRuns.run_id)
+        .where(
+            UserWorkflows.is_adhoc.is_(True),
+            UserWorkflows.deleted == 0,
+            WorkflowRuns.archived.is_(False),
+        )
+        .where(*_run_scope_filter(user))
+        .order_by(WorkflowRuns.started_at.desc())
+        .limit(ADHOC_RUNS_LIMIT)
+    )
+    result = await session.execute(q)
+    rows: list[AdHocRunListItem] = []
+    for run, workflow, wf_type, artifact_count in result.all():
+        rows.append(AdHocRunListItem(
+            run_id=run.run_id,
+            workflow_id=workflow.workflow_id,
+            workflow_name=workflow.name,
+            type_id=wf_type.type_id,
+            type_long_name=wf_type.long_name,
+            status=run.status,
+            current_step=run.current_step,
+            total_steps=run.total_steps,
+            trigger=run.trigger,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            artifact_count=int(artifact_count or 0),
+        ))
+    return rows

@@ -100,6 +100,10 @@ export default function TopNavBar() {
               <LinkContainer to="/app/ad-hoc/email-topic-monitor">
                 <NavDropdown.Item>Email Topic Monitor</NavDropdown.Item>
               </LinkContainer>
+              <NavDropdown.Divider />
+              <LinkContainer to="/app/ad-hoc/runs">
+                <NavDropdown.Item>Past Runs</NavDropdown.Item>
+              </LinkContainer>
             </NavDropdown>
             {version && (
               <OverlayTrigger
