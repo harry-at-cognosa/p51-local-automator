@@ -1,8 +1,101 @@
 import { useEffect, useState } from "react";
-import { Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
+import { Accordion, Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
 import SchemaConfigForm, { type FieldDescriptor } from "./SchemaConfigForm";
 import FilePicker, { type FilePickerSelection } from "./FilePicker";
 import axiosClient from "../api/axiosClient";
+
+// ── Advanced limits section, shared across hand-tuned forms ─────────
+//
+// Each Types 1–6 form appends an <AdvancedLimitsSection /> with the
+// type's relevant numeric knobs. Blank input means "use whatever
+// resolve_int_setting() resolves at run time" (group_settings →
+// api_settings → runner fallback). The placeholder displays the
+// currently-configured api_settings default for the field.
+
+interface LimitField {
+  key: string;
+  label: string;
+  defaultValue: number | null;  // shown in placeholder; null = "(no cap)"
+  help?: string;
+  min?: number;
+  max?: number;
+}
+
+function AdvancedLimitsSection({
+  config,
+  set,
+  fields,
+}: {
+  config: Record<string, unknown>;
+  set: (key: string, value: unknown) => void;
+  fields: LimitField[];
+}) {
+  return (
+    <Accordion className="mt-3">
+      <Accordion.Item eventKey="advanced-limits">
+        <Accordion.Header>Advanced — limits and caps</Accordion.Header>
+        <Accordion.Body>
+          <Row className="g-3">
+            {fields.map((f) => (
+              <Col md={6} key={f.key}>
+                <Form.Group>
+                  <Form.Label>{f.label}</Form.Label>
+                  <Form.Control
+                    type="number"
+                    min={f.min}
+                    max={f.max}
+                    placeholder={
+                      f.defaultValue !== null
+                        ? `Default: ${f.defaultValue}`
+                        : "(no cap)"
+                    }
+                    value={
+                      typeof config[f.key] === "number" || typeof config[f.key] === "string"
+                        ? (config[f.key] as number | string)
+                        : ""
+                    }
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "") {
+                        set(f.key, undefined);
+                      } else {
+                        const n = parseInt(v, 10);
+                        set(f.key, Number.isNaN(n) ? undefined : n);
+                      }
+                    }}
+                  />
+                  {f.help && <Form.Text className="text-muted">{f.help}</Form.Text>}
+                </Form.Group>
+              </Col>
+            ))}
+          </Row>
+        </Accordion.Body>
+      </Accordion.Item>
+    </Accordion>
+  );
+}
+
+const LIMITS_TYPE1: LimitField[] = [
+  { key: "email_fetch_limit", label: "Max emails fetched per account", defaultValue: 100, min: 1,
+    help: "Per run, per account. Larger values raise API/IMAP cost." },
+];
+
+const LIMITS_TYPE2: LimitField[] = [
+  { key: "analyzer_timeout_seconds", label: "Analyzer script timeout (sec)", defaultValue: 120, min: 5 },
+  { key: "analyzer_text_truncate_chars", label: "Profile/summary text cap (chars)", defaultValue: 8000, min: 500,
+    help: "Each markdown report sent to the LLM is truncated to this length." },
+];
+
+const LIMITS_TYPE4: LimitField[] = [
+  { key: "sql_llm_sample_rows", label: "Rows sent to LLM for analysis", defaultValue: 50, min: 1 },
+  { key: "sql_row_limit", label: "Hard cap on returned rows", defaultValue: null,
+    help: "Blank = no cap; query results pass through unbounded." },
+];
+
+const LIMITS_TYPE56: LimitField[] = [
+  { key: "reply_max_candidates", label: "Max reply drafts per run", defaultValue: 20, min: 1,
+    help: "After dedup-by-sender, run stops generating once this many drafts exist." },
+];
 
 interface Props {
   typeId: number;
@@ -106,6 +199,9 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
             />
             <Form.Text className="text-muted">Read-only queries only (SELECT, WITH, EXPLAIN)</Form.Text>
           </Form.Group>
+        </Col>
+        <Col md={12}>
+          <AdvancedLimitsSection config={config} set={set} fields={LIMITS_TYPE4} />
         </Col>
       </Row>
     );
@@ -312,6 +408,7 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
           ))}
         </div>
       )}
+      <AdvancedLimitsSection config={config} set={set} fields={LIMITS_TYPE1} />
     </>
   );
 }
@@ -496,6 +593,9 @@ function Type56AutoReplyForm({ config, onChange, set }: Type56Props) {
             style={{ fontFamily: "monospace", fontSize: "0.9em" }}
           />
         </Form.Group>
+      </Col>
+      <Col md={12}>
+        <AdvancedLimitsSection config={config} set={set} fields={LIMITS_TYPE56} />
       </Col>
     </Row>
   );
@@ -797,6 +897,9 @@ function Type2DataAnalyzerForm({ config, set }: Type2Props) {
             }}
           />
         </Form.Group>
+      </Col>
+      <Col md={12}>
+        <AdvancedLimitsSection config={config} set={set} fields={LIMITS_TYPE2} />
       </Col>
     </Row>
   );
