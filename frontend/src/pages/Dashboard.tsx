@@ -36,6 +36,7 @@ interface RecentRun {
   type_long_name: string;
   status: string;
   started_at: string;
+  is_adhoc?: boolean;
 }
 
 interface HealthResponse {
@@ -217,7 +218,21 @@ export default function Dashboard() {
                   <td>#{r.run_id}</td>
                   <td>{r.category_id}-{r.category_short_name}</td>
                   <td>{r.type_id}-{r.type_long_name}</td>
-                  <td>{r.workflow_name}</td>
+                  <td>
+                    {r.workflow_name}
+                    {r.is_adhoc && (
+                      <span
+                        className="badge ms-2"
+                        style={{
+                          fontSize: "0.7em",
+                          backgroundColor: "var(--theme-color-200)",
+                          color: "var(--theme-color-900)",
+                        }}
+                      >
+                        ad-hoc
+                      </span>
+                    )}
+                  </td>
                   <td><StatusBadge status={r.status} /></td>
                   <td>{new Date(r.started_at).toLocaleString()}</td>
                 </tr>
