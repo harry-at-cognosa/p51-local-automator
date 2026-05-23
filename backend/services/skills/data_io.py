@@ -162,10 +162,39 @@ async def write_artifact(
     name: str,
     content: Any,
     kind: str = "text",
+    meta: dict | None = None,
 ) -> dict:
+    """Persist `content` as a named artifact inside ctx.artifacts_dir.
+
+    When `meta` is supplied, the appropriate per-format wrapper from
+    backend.services.artifact_meta is applied so the metadata block is
+    embedded in the file content itself (JSON __meta__ key, Markdown
+    YAML frontmatter). Callers are expected to populate Filename in
+    meta with the same `name` value; the helper does NOT mutate the
+    meta dict.
+    """
     if "/" in name or "\\" in name or name in ("", ".", ".."):
         raise ValueError(f"write_artifact name must be a basename, got {name!r}")
     path = os.path.join(ctx.artifacts_dir, name)
+
+    # Apply per-format meta wrapping when a meta dict is supplied. JSON
+    # callers pass content as dict/list; markdown/text callers pass str.
+    # Excel/CSV/PNG bypass this skill (they're written by external scripts
+    # or directly via pandas/openpyxl) so only json/md/text need wrapping
+    # here.
+    if meta is not None:
+        from backend.services.artifact_meta import wrap_json, wrap_markdown
+        if isinstance(content, (dict, list)):
+            content = wrap_json(meta, content)
+        elif isinstance(content, str) and kind in ("md", "markdown"):
+            content = wrap_markdown(meta, content)
+        # Plain text artifacts: prepend the meta as #-comment lines so a
+        # txt log file still self-identifies. Markdown-suffixed names are
+        # treated as markdown above; everything else falls through.
+        elif isinstance(content, str) and (kind in ("txt", "text") or name.endswith(".txt")):
+            from backend.services.artifact_meta import wrap_csv_bytes
+            content = wrap_csv_bytes(meta, content)
+
     if isinstance(content, (dict, list)):
         body = json.dumps(content, indent=2, default=str)
     elif isinstance(content, str):

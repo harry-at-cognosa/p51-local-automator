@@ -739,7 +739,20 @@ WORKFLOW_RUNNERS = {
 async def _run_workflow_background(workflow_id: int):
     """Run a workflow in the background with its own DB session."""
     async with SqlAsyncSession() as session:
-        workflow = await session.get(UserWorkflows, workflow_id)
+        # Eager-load workflow_type + user + group so the artifact_meta
+        # builder (and any other code that wants human-readable labels
+        # for the run) can read them without lazy-load surprises.
+        from backend.db.models import User
+        workflow = (
+            await session.execute(
+                select(UserWorkflows)
+                .options(
+                    selectinload(UserWorkflows.workflow_type),
+                    selectinload(UserWorkflows.user).selectinload(User.group),
+                )
+                .where(UserWorkflows.workflow_id == workflow_id)
+            )
+        ).scalar_one_or_none()
         if not workflow or workflow.deleted != 0:
             return
 

@@ -169,17 +169,31 @@ def build_artifact_meta(
     looking at. Per the design memo, no per-format mutation happens
     here — that's the wrappers' job.
     """
+    # Relationship accesses are wrapped in try/except because the
+    # runner often loads workflow rows via plain session.get() (no
+    # eager loading), and async SQLAlchemy raises rather than returning
+    # None for unloaded relationships. Falling through silently is the
+    # right call — the meta block stays useful with whatever IS loaded.
     type_long_name = ""
     type_id = workflow.type_id
-    if workflow.workflow_type is not None:
-        type_long_name = workflow.workflow_type.long_name or workflow.workflow_type.type_name or ""
+    try:
+        if workflow.workflow_type is not None:
+            type_long_name = workflow.workflow_type.long_name or workflow.workflow_type.type_name or ""
+    except Exception:
+        pass
 
     user_name = ""
     group_name = ""
-    if workflow.user is not None:
-        user_name = workflow.user.user_name or ""
-        if workflow.user.group is not None:
-            group_name = workflow.user.group.short_name or ""
+    try:
+        if workflow.user is not None:
+            user_name = workflow.user.user_name or ""
+            try:
+                if workflow.user.group is not None:
+                    group_name = workflow.user.group.short_name or ""
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     started_at = (run.started_at or datetime.now(timezone.utc))
     if started_at.tzinfo is None:

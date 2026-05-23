@@ -282,6 +282,16 @@ class AgenticEngine:
         for any external caller / unit test."""
         return _truncate_summary(value, self.step_summary_truncate_chars)
 
+    def _artifact_meta(self, filename: str, *, kind: str | None = None) -> dict:
+        """Build the self-describing artifact metadata block for a file
+        about to be written. Passed to write_artifact's `meta` kwarg
+        so the appropriate per-format wrapper (JSON __meta__, markdown
+        frontmatter, etc.) embeds it into the file content."""
+        from backend.services.artifact_meta import build_artifact_meta
+        return build_artifact_meta(
+            self.workflow, self.run, kind=kind, filename=filename,
+        )
+
     def _stage_addendum(self, stage_name: str) -> str:
         """Per-stage user-supplied prompt fragment.
 
@@ -846,6 +856,7 @@ class AgenticEngine:
                 name="draft_report.md",
                 content=draft_md,
                 kind="md",
+                meta=self._artifact_meta("draft_report.md", kind="md"),
             )
             self.draft_report_path = artifact["path"] if artifact else None
             await self._stage_marker_complete(
@@ -937,6 +948,7 @@ class AgenticEngine:
                 name="audit_critique.json",
                 content=self.audit_critique,
                 kind="json",
+                meta=self._artifact_meta("audit_critique.json", kind="json"),
             )
 
             await self._stage_marker_complete(
@@ -1043,6 +1055,7 @@ class AgenticEngine:
                 name=filename,
                 content=polished,
                 kind="md",
+                meta=self._artifact_meta(filename, kind="md"),
             )
             self.final_report_path = artifact["path"] if artifact else None
 
@@ -1195,6 +1208,7 @@ class AgenticEngine:
                 name="partial_report.md",
                 content="\n".join(lines),
                 kind="md",
+                meta=self._artifact_meta("partial_report.md", kind="md"),
             )
         except Exception as e:  # noqa: BLE001
             log.error("partial_report_write_failed", error=str(e))
