@@ -315,7 +315,18 @@ def main():
     args = parse_args()
 
     with open(args.input_json) as f:
-        emails = json.load(f)
+        raw = json.load(f)
+
+    # Backward-compat: input JSON is either the legacy bare list of email
+    # dicts, OR the new self-describing wrapper {"__meta__": {...}, "data": [...]}.
+    # When the wrapper is present and --meta-json wasn't passed, harvest the
+    # embedded meta so the Provenance sheet still gets populated.
+    if isinstance(raw, dict) and "data" in raw:
+        emails = raw["data"]
+        if not args.meta_json and isinstance(raw.get("__meta__"), dict):
+            args.meta_json = json.dumps(raw["__meta__"], default=str)
+    else:
+        emails = raw
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     slug = f"_{args.slug}" if args.slug else ""
