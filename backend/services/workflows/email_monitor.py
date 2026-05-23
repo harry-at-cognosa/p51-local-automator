@@ -367,8 +367,15 @@ async def run_email_monitor(
 
         excel_script = os.path.join(SCRIPTS_DIR, "email_to_excel.py")
         if os.path.exists(excel_script):
+            xlsx_meta = build_artifact_meta(
+                workflow, run, kind="xlsx", filename="email_monitor.xlsx",
+            )
             result = subprocess.run(
-                ["python3", excel_script, json_path, "--output-dir", output_dir],
+                [
+                    "python3", excel_script, json_path,
+                    "--output-dir", output_dir,
+                    "--meta-json", json.dumps(xlsx_meta, default=str),
+                ],
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:

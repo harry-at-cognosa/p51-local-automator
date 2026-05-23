@@ -42,7 +42,41 @@ def parse_args():
     parser.add_argument("input_json", help="Path to JSON file with categorized emails")
     parser.add_argument("--output-dir", help="Output directory", default=".")
     parser.add_argument("--slug", help="Optional slug for output filename", default="")
+    parser.add_argument(
+        "--meta-json",
+        default="",
+        help="Optional JSON blob of self-describing artifact metadata. When supplied, "
+        "a 'Provenance' sheet is inserted as the first sheet of the workbook listing "
+        "every Field/Value pair. Mirrors backend/services/artifact_meta.wrap_excel_workbook.",
+    )
     return parser.parse_args()
+
+
+def _inject_provenance_sheet(wb, meta_json: str) -> None:
+    """Duplicates the small subset of artifact_meta.wrap_excel_workbook
+    that scripts need. Inserted as the first sheet so a human opening
+    the file sees the metadata immediately; active sheet flipped back
+    to index 1 so Excel opens to the data."""
+    if not meta_json:
+        return
+    try:
+        meta = json.loads(meta_json)
+    except Exception:
+        return
+    if not isinstance(meta, dict):
+        return
+    if "Provenance" in wb.sheetnames:
+        del wb["Provenance"]
+    ws = wb.create_sheet("Provenance", 0)
+    ws.append(["Field", "Value"])
+    for key, value in meta.items():
+        if isinstance(value, (dict, list)):
+            value_str = json.dumps(value, default=str)
+        else:
+            value_str = str(value)
+        ws.append([key, value_str])
+    if len(wb.sheetnames) > 1:
+        wb.active = 1
 
 
 # -- Template-derived style constants --
@@ -156,7 +190,7 @@ def set_column_widths(ws, columns):
         ws.column_dimensions[letter].width = widths.get(col_name, 20)
 
 
-def create_workbook(emails, output_path):
+def create_workbook(emails, output_path, meta_json: str = ""):
     """Create the full Excel workbook with summary + per-topic sheets."""
     wb = Workbook()
 
@@ -268,6 +302,8 @@ def create_workbook(emails, output_path):
 
         set_column_widths(ws_topic, topic_columns)
 
+    _inject_provenance_sheet(wb, meta_json)
+
     wb.save(output_path)
     print(f"Saved: {output_path}")
     print(f"  {len(emails)} emails across {len(by_topic)} topics")
@@ -287,7 +323,7 @@ def main():
     output_path = os.path.join(args.output_dir, filename)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    create_workbook(emails, output_path)
+    create_workbook(emails, output_path, meta_json=args.meta_json)
 
 
 if __name__ == "__main__":

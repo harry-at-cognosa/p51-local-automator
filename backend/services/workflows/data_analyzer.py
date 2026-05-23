@@ -132,6 +132,14 @@ async def run_data_analyzer(
         if config.get("days"):
             cmd.extend(["--days", str(config["days"])])
 
+        # Self-describing meta block flows through the analyze_data.py
+        # script via --meta-json; the script embeds it in every file it
+        # writes (frontmatter on .md, #-comments on .csv, Provenance
+        # sheet on .xlsx, attribution footer on .png).
+        from backend.services.artifact_meta import build_artifact_meta
+        meta = build_artifact_meta(workflow, run, filename="(analyze_data.py outputs)")
+        cmd.extend(["--meta-json", json.dumps(meta, default=str)])
+
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
 
         if result.returncode != 0:

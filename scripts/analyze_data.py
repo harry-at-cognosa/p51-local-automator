@@ -45,7 +45,136 @@ def parse_args():
     parser.add_argument("--before", help="Show transactions before date (YYYY-MM-DD)")
     parser.add_argument("--after", help="Show transactions after date (YYYY-MM-DD)")
     parser.add_argument("--output-dir", help="Override output directory")
+    parser.add_argument(
+        "--meta-json",
+        default="",
+        help="Optional JSON blob of self-describing artifact metadata. When supplied, "
+        "every file this script writes carries the metadata embedded: markdown reports "
+        "get YAML frontmatter, csv/xlsx get a Provenance header (#-lines or a sheet), "
+        "and chart PNGs get a small attribution footer.",
+    )
     return parser.parse_args()
+
+
+# ── Self-describing artifact metadata helpers ───────────────────────
+# Duplicates a small portion of backend/services/artifact_meta.py so
+# this standalone script can run without importing backend code.
+
+_META: dict = {}  # populated once in main() from --meta-json
+
+
+def _load_meta(raw: str) -> dict:
+    if not raw:
+        return {}
+    try:
+        m = json.loads(raw)
+    except Exception:
+        return {}
+    return m if isinstance(m, dict) else {}
+
+
+def _yaml_scalar(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    s = str(value)
+    if any(ch in s for ch in ":#&*?{}[]|>%@`,'\"") or s.strip() != s or not s:
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
+def _yaml_lines(meta, indent=0):
+    lines = []
+    pad = "  " * indent
+    for key, value in meta.items():
+        if isinstance(value, dict):
+            lines.append(f"{pad}{key}:")
+            lines.extend(_yaml_lines(value, indent + 1))
+        elif isinstance(value, list):
+            if not value:
+                lines.append(f"{pad}{key}: []")
+                continue
+            lines.append(f"{pad}{key}:")
+            for item in value:
+                if isinstance(item, dict):
+                    items = list(item.items())
+                    fk, fv = items[0]
+                    lines.append(f"{pad}  - {fk}: {_yaml_scalar(fv)}")
+                    for k, v in items[1:]:
+                        lines.append(f"{pad}    {k}: {_yaml_scalar(v)}")
+                else:
+                    lines.append(f"{pad}  - {_yaml_scalar(item)}")
+        else:
+            lines.append(f"{pad}{key}: {_yaml_scalar(value)}")
+    return lines
+
+
+def wrap_md_with_meta(body: str) -> str:
+    if not _META:
+        return body
+    fm = ["---"] + _yaml_lines(_META) + ["---", ""]
+    return "\n".join(fm) + "\n" + (body or "")
+
+
+def wrap_csv_with_meta(csv_body: str) -> str:
+    if not _META:
+        return csv_body
+    out = []
+    for key, value in _META.items():
+        if isinstance(value, (dict, list)):
+            value_str = json.dumps(value, default=str)
+        else:
+            value_str = str(value)
+        value_str = value_str.replace("\n", " ").replace("\r", " ")
+        out.append(f"# {key}: {value_str}")
+    return "\n".join(out) + "\n" + (csv_body or "")
+
+
+def inject_xlsx_provenance(workbook) -> None:
+    """openpyxl Workbook → Provenance as first sheet. No-op if no meta."""
+    if not _META:
+        return
+    if "Provenance" in workbook.sheetnames:
+        del workbook["Provenance"]
+    ws = workbook.create_sheet("Provenance", 0)
+    ws.append(["Field", "Value"])
+    for key, value in _META.items():
+        if isinstance(value, (dict, list)):
+            value_str = json.dumps(value, default=str)
+        else:
+            value_str = str(value)
+        ws.append([key, value_str])
+    if len(workbook.sheetnames) > 1:
+        workbook.active = 1
+
+
+def chart_footer_text() -> str:
+    """One-liner suitable for fig.text() at the bottom of a chart."""
+    if not _META:
+        return ""
+    name = _META.get("Workflow name") or _META.get("Workflow") or "workflow"
+    subject = _META.get("Subject") or {}
+    bits = [str(name)]
+    if isinstance(subject, dict):
+        if "file" in subject:
+            bits.append(str(subject["file"]))
+        elif "accounts" in subject and isinstance(subject["accounts"], list):
+            bits.append(", ".join(str(a) for a in subject["accounts"]))
+        elif "calendars" in subject and isinstance(subject["calendars"], list):
+            bits.append(", ".join(str(c) for c in subject["calendars"]))
+    run_id = _META.get("Run ID")
+    if run_id is not None:
+        bits.append(f"run #{run_id}")
+    return " — ".join(bits)
+
+
+def add_chart_footer(fig):
+    """Apply chart_footer_text as a small gray attribution footer."""
+    text = chart_footer_text()
+    if not text:
+        return
+    fig.text(0.5, 0.005, text, fontsize=7, color="gray", ha="center")
 
 
 def resolve_date_range(args):
@@ -250,7 +379,9 @@ def write_filtered_excel(df: pd.DataFrame, output_path: str, date_col: str | Non
     """
     if len(df) > XLSX_MAX_ROWS:
         csv_path = os.path.splitext(output_path)[0] + ".csv"
-        df.to_csv(csv_path, index=False)
+        csv_body = df.to_csv(index=False)
+        with open(csv_path, "w") as cf:
+            cf.write(wrap_csv_with_meta(csv_body))
         print(f"  Saved filtered CSV: {csv_path} ({len(df)} rows, {len(df.columns)} columns; xlsx row cap exceeded)")
         return
 
@@ -302,6 +433,7 @@ def write_filtered_excel(df: pd.DataFrame, output_path: str, date_col: str | Non
     # Add autofilter
     ws.auto_filter.ref = ws.dimensions
 
+    inject_xlsx_provenance(wb)
     wb.save(output_path)
     print(f"  Saved filtered Excel: {output_path} ({len(df)} rows, {len(df.columns)} columns)")
 
@@ -415,6 +547,7 @@ def generate_charts(df: pd.DataFrame, amount_cols: list[str],
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, p: f"${x:,.0f}" if abs(x) >= 1 else f"{x:,.2f}"))
         plt.tight_layout()
         path = os.path.join(output_dir, "step3_chart_by_category.png")
+        add_chart_footer(fig)
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         chart_files.append(path)
@@ -465,6 +598,7 @@ def generate_charts(df: pd.DataFrame, amount_cols: list[str],
 
             plt.tight_layout()
             path = os.path.join(output_dir, "step3_chart_trend.png")
+            add_chart_footer(fig)
             fig.savefig(path, dpi=150, bbox_inches="tight")
             plt.close(fig)
             chart_files.append(path)
@@ -504,6 +638,7 @@ def generate_charts(df: pd.DataFrame, amount_cols: list[str],
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, p: f"${x:,.0f}"))
         plt.tight_layout()
         path = os.path.join(output_dir, "step3_chart_comparison.png")
+        add_chart_footer(fig)
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         chart_files.append(path)
@@ -605,6 +740,12 @@ def detect_outliers_and_quality(df: pd.DataFrame, amount_cols: list[str],
 def main():
     args = parse_args()
 
+    # Populate the script's _META dict from --meta-json so the
+    # wrap_* / add_chart_footer helpers find it. No-op when the flag
+    # is empty (lets the script run standalone without the runner).
+    global _META
+    _META = _load_meta(args.meta_json)
+
     # Set up output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.output_dir:
@@ -654,7 +795,7 @@ def main():
     profile = profile_data(df, date_col, amount_cols, category_cols)
     profile_path = os.path.join(output_dir, "step1_data_profile.md")
     with open(profile_path, "w") as f:
-        f.write(profile)
+        f.write(wrap_md_with_meta(profile))
     print(f"  Saved profile: {profile_path}")
     print(f"  Detected: date_col={date_col}, amounts={amount_cols}, categories={category_cols}")
     print()
@@ -704,7 +845,7 @@ def main():
                               date_col, prior_df)
     summary_path = os.path.join(output_dir, "step3_summary_report.md")
     with open(summary_path, "w") as f:
-        f.write(summary)
+        f.write(wrap_md_with_meta(summary))
     print(f"  Saved summary: {summary_path}")
 
     chart_files = generate_charts(selected, active_amount_cols, active_cat_cols,
@@ -719,7 +860,7 @@ def main():
     quality = detect_outliers_and_quality(selected, active_amount_cols, date_col)
     quality_path = os.path.join(output_dir, "step4_quality_report.md")
     with open(quality_path, "w") as f:
-        f.write(quality)
+        f.write(wrap_md_with_meta(quality))
     print(f"  Saved quality report: {quality_path}")
     print()
 
