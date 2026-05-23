@@ -76,6 +76,52 @@ def _build_credentials(account: GmailAccounts):
     )
 
 
+def _looks_like_invalid_grant(exc: Exception) -> bool:
+    """True when an exception almost certainly means the OAuth refresh
+    token is dead (expired/revoked at Google) — either because the
+    explicit refresh failed or because the api-client's auto-refresh
+    during an API call failed.
+
+    We treat the following as positive signals:
+      - google.auth.exceptions.RefreshError (any subclass)
+      - any exception whose stringified form contains "invalid_grant"
+      - any exception mentioning "Token has been expired or revoked"
+    """
+    try:
+        from google.auth.exceptions import RefreshError
+        if isinstance(exc, RefreshError):
+            return True
+    except ImportError:
+        pass
+    msg = str(exc).lower()
+    return "invalid_grant" in msg or "expired or revoked" in msg
+
+
+async def _flip_disconnected_if_refresh_failure(
+    session: AsyncSession,
+    account: GmailAccounts,
+    exc: Exception,
+) -> bool:
+    """If `exc` looks like an OAuth refresh failure, set the account's
+    status to 'disconnected' and flush. Returns True when flipped, False
+    otherwise. Caller is responsible for re-raising.
+
+    The caller's request handler must commit the session for the change
+    to survive; the standard FastAPI dependency closes the session
+    without commit on its own, which would roll back this flush.
+    """
+    if not _looks_like_invalid_grant(exc):
+        return False
+    if account.status != "disconnected":
+        log.warning(
+            "gmail_account_marked_disconnected",
+            account_id=account.id, error=str(exc)[:200],
+        )
+        account.status = "disconnected"
+        await session.flush()
+    return True
+
+
 async def _ensure_fresh_credentials(
     session: AsyncSession,
     account: GmailAccounts,
@@ -100,8 +146,13 @@ async def _ensure_fresh_credentials(
         await asyncio.to_thread(_refresh)
     except Exception as e:
         log.warning("gmail_token_refresh_failed", account_id=account.id, error=str(e)[:200])
-        account.status = "disconnected"
-        await session.flush()
+        await _flip_disconnected_if_refresh_failure(session, account, e)
+        # Even if the exception wasn't an obvious invalid_grant, the refresh
+        # failed — preserve the historical behavior of marking the account
+        # disconnected so retries don't loop.
+        if account.status != "disconnected":
+            account.status = "disconnected"
+            await session.flush()
         raise GmailRefreshFailedError(
             f"Could not refresh access token for {account.email}: {e}"
         ) from e
@@ -267,6 +318,7 @@ async def gmail_list_messages(
         results = await asyncio.to_thread(_list_and_metadata)
     except Exception as e:
         await _log_event(session, account_id, "list_messages", workflow_id, run_id, str(e)[:500])
+        await _flip_disconnected_if_refresh_failure(session, account, e)
         raise
 
     account.last_used_at = datetime.now(timezone.utc)
@@ -296,6 +348,7 @@ async def gmail_get_message(
         msg = await asyncio.to_thread(_get)
     except Exception as e:
         await _log_event(session, account_id, "get_message", workflow_id, run_id, str(e)[:500])
+        await _flip_disconnected_if_refresh_failure(session, account, e)
         raise
 
     payload = msg.get("payload", {}) or {}
@@ -366,6 +419,7 @@ async def gmail_save_draft(
         result = await asyncio.to_thread(_create)
     except Exception as e:
         await _log_event(session, account_id, "save_draft", workflow_id, run_id, str(e)[:500])
+        await _flip_disconnected_if_refresh_failure(session, account, e)
         raise
 
     account.last_used_at = datetime.now(timezone.utc)
@@ -409,6 +463,7 @@ async def gmail_send_message(
         result = await asyncio.to_thread(_send)
     except Exception as e:
         await _log_event(session, account_id, "send_message", workflow_id, run_id, str(e)[:500])
+        await _flip_disconnected_if_refresh_failure(session, account, e)
         raise
 
     account.last_used_at = datetime.now(timezone.utc)
@@ -451,6 +506,7 @@ async def gmail_search(
         results = await asyncio.to_thread(_search)
     except Exception as e:
         await _log_event(session, account_id, "search", workflow_id, run_id, str(e)[:500])
+        await _flip_disconnected_if_refresh_failure(session, account, e)
         raise
 
     account.last_used_at = datetime.now(timezone.utc)
