@@ -70,6 +70,34 @@ All numeric workflow caps resolve through `resolve_int_setting()` in `backend/se
 
 **Operator tuning:** superuser edits `api_settings` defaults at `/app/admin/settings`; groupadmin sets per-group overrides at `/app/admin/group-settings`; user sets per-workflow overrides via the "Advanced" section on each workflow type's config form.
 
+## Self-describing artifacts
+
+Every artifact a workflow run produces carries an embedded metadata block identifying the run + the subject it operated on. Single source of truth: `backend/services/artifact_meta.py` (`build_artifact_meta` + per-type Subject adapters + per-format wrappers).
+
+**Per-format conventions:**
+
+| Format | Where the meta lives |
+|---|---|
+| JSON | top-level `__meta__` key (first key in insertion order) |
+| Markdown | YAML frontmatter block at the top (`---\n...\n---\n`) |
+| Excel `.xlsx` | sheet named `Provenance`, inserted as the first sheet of the workbook |
+| CSV | leading `#`-prefixed comment lines |
+| PNG chart | small attribution footer rendered onto the chart via matplotlib `fig.text` |
+
+**Read-side conventions for downstream code:**
+
+- CSV: `pd.read_csv(path, comment="#")` skips the meta header cleanly.
+- Excel: `pd.read_excel(path)` with no `sheet_name` reads the FIRST sheet, which after wrapping is `Provenance` (the meta), not the data. Pass `sheet_name="Results"` (sql_runner) or `sheet_name="Filtered Data"` (analyze_data.py) or the workflow's actual data-sheet name to get the data. Excel itself opens to the data sheet because the wrapper flips the active-sheet pointer after inserting Provenance.
+- JSON: `data = json.load(f); del data["__meta__"]` if the consumer doesn't want it, or `data.pop("__meta__", None)`. The wrapper also moves list payloads into a `data` key, so legacy list-shaped readers need to do `data["data"]` instead of the bare list.
+- Markdown: most renderers (incl. p51's `MarkdownRender` today) display the frontmatter as raw text at the top. Acceptable for now; can be taught to parse + render later.
+
+**Where to extend:**
+- New workflow type with a different "Subject" shape → add an adapter function in `artifact_meta.py` and register it in `_SUBJECT_ADAPTERS`.
+- New artifact format → add a `wrap_*` function in the same module.
+- External scripts that produce artifacts (currently `scripts/analyze_data.py` and `scripts/email_to_excel.py`) accept `--meta-json '<json blob>'`; their runners pass `build_artifact_meta()` output through it. Both scripts inline a small duplicate of the wrapper logic since they can't easily import backend code.
+
+No backfill — artifacts produced before this commit have no meta block.
+
 ## Versioning
 
 - **Scheme:** CalVer `YYYY.MM.DD.N` (e.g. `2026.05.18.0`, `2026.05.18.1`, `2026.05.19.0`). The trailing `N` is a per-day serial that resets to 0 each new day. Date is zero-padded so the format also string-sorts correctly.
