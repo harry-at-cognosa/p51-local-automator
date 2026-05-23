@@ -32,6 +32,7 @@ interface AccountOut {
   account?: string;
   email?: string;
   app_password?: string;  // STORED_SENTINEL or undefined
+  account_id?: number;    // gmail (Workspace OAuth)
 }
 
 interface ConfigRead {
@@ -50,29 +51,43 @@ interface TestResult {
   reason: string;
 }
 
+interface GmailAccountOption {
+  id: number;
+  email: string;
+  status: "active" | "disconnected" | "revoked";
+}
+
+type ServiceKind = "apple_mail" | "gmail_imap" | "gmail";
+
 interface AccountForm {
-  service: "apple_mail" | "gmail_imap";
+  service: ServiceKind;
   account: string;        // apple_mail
   email: string;          // gmail_imap
   app_password: string;   // gmail_imap — empty means "keep stored"
   has_stored: boolean;    // tracks whether server has a password stored
+  account_id: number | null;  // gmail (Workspace OAuth — FK into gmail_accounts.id)
 }
 
 function emptyAppleMailRow(): AccountForm {
-  return { service: "apple_mail", account: "iCloud", email: "", app_password: "", has_stored: false };
+  return { service: "apple_mail", account: "iCloud", email: "", app_password: "", has_stored: false, account_id: null };
 }
 
-function emptyGmailRow(): AccountForm {
-  return { service: "gmail_imap", account: "", email: "", app_password: "", has_stored: false };
+function emptyGmailImapRow(): AccountForm {
+  return { service: "gmail_imap", account: "", email: "", app_password: "", has_stored: false, account_id: null };
+}
+
+function emptyGmailOAuthRow(): AccountForm {
+  return { service: "gmail", account: "", email: "", app_password: "", has_stored: false, account_id: null };
 }
 
 function readToForm(c: ConfigRead): AccountForm[] {
   return c.accounts.map((a) => ({
-    service: (a.service as "apple_mail" | "gmail_imap") || "apple_mail",
+    service: (a.service as ServiceKind) || "apple_mail",
     account: a.account || "",
     email: a.email || "",
     app_password: "",
     has_stored: a.app_password === STORED_SENTINEL,
+    account_id: typeof a.account_id === "number" ? a.account_id : null,
   }));
 }
 
@@ -80,6 +95,9 @@ function formToWriteAccounts(forms: AccountForm[]): unknown[] {
   return forms.map((f) => {
     if (f.service === "apple_mail") {
       return { service: "apple_mail", account: f.account.trim() || "iCloud" };
+    }
+    if (f.service === "gmail") {
+      return { service: "gmail", account_id: f.account_id };
     }
     return {
       service: "gmail_imap",
@@ -106,6 +124,17 @@ export default function AdHocEmailMonitor() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [feedbackKind, setFeedbackKind] = useState<"success" | "danger" | "info">("info");
   const [showClearModal, setShowClearModal] = useState(false);
+
+  // Workspace Gmail (OAuth) accounts available for the gmail-service picker.
+  // Fetched on mount; stays empty if no rows are connected (the picker will
+  // surface a "no connected accounts" message in that case).
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  useEffect(() => {
+    axiosClient
+      .get<GmailAccountOption[]>("/gmail/accounts")
+      .then((res) => setGmailAccounts(res.data || []))
+      .catch(() => setGmailAccounts([]));
+  }, []);
 
   const loadConfig = async () => {
     setLoading(true);
@@ -229,7 +258,8 @@ export default function AdHocEmailMonitor() {
   };
 
   const addAppleMail = () => setAccounts((prev) => [...prev, emptyAppleMailRow()]);
-  const addGmailImap = () => setAccounts((prev) => [...prev, emptyGmailRow()]);
+  const addGmailImap = () => setAccounts((prev) => [...prev, emptyGmailImapRow()]);
+  const addGmailOAuth = () => setAccounts((prev) => [...prev, emptyGmailOAuthRow()]);
 
   if (loading) {
     return (
@@ -275,15 +305,16 @@ export default function AdHocEmailMonitor() {
                   value={a.service}
                   onChange={(e) =>
                     updateAccount(i, {
-                      service: e.target.value as "apple_mail" | "gmail_imap",
+                      service: e.target.value as ServiceKind,
                     })
                   }
                 >
                   <option value="apple_mail">Apple Mail (local)</option>
                   <option value="gmail_imap">Gmail (App Password)</option>
+                  <option value="gmail">Gmail (connected workspace account)</option>
                 </Form.Select>
               </Col>
-              {a.service === "apple_mail" ? (
+              {a.service === "apple_mail" && (
                 <Col md={6}>
                   <Form.Label className="small">Mail.app account name</Form.Label>
                   <Form.Control
@@ -293,7 +324,8 @@ export default function AdHocEmailMonitor() {
                     onChange={(e) => updateAccount(i, { account: e.target.value })}
                   />
                 </Col>
-              ) : (
+              )}
+              {a.service === "gmail_imap" && (
                 <>
                   <Col md={4}>
                     <Form.Label className="small">Gmail address</Form.Label>
@@ -326,6 +358,34 @@ export default function AdHocEmailMonitor() {
                   </Col>
                 </>
               )}
+              {a.service === "gmail" && (
+                <Col md={6}>
+                  <Form.Label className="small">Connected Gmail account</Form.Label>
+                  {gmailAccounts.length === 0 ? (
+                    <Form.Text className="text-muted d-block">
+                      No connected accounts yet. Connect one at{" "}
+                      <a href="/app/connections">Connections</a>, then return here.
+                    </Form.Text>
+                  ) : (
+                    <Form.Select
+                      value={a.account_id === null ? "" : String(a.account_id)}
+                      onChange={(e) =>
+                        updateAccount(i, {
+                          account_id: e.target.value ? parseInt(e.target.value, 10) : null,
+                        })
+                      }
+                    >
+                      <option value="">— select an account —</option>
+                      {gmailAccounts.map((g) => (
+                        <option key={g.id} value={g.id} disabled={g.status !== "active"}>
+                          {g.email}
+                          {g.status !== "active" ? ` (${g.status})` : ""}
+                        </option>
+                      ))}
+                    </Form.Select>
+                  )}
+                </Col>
+              )}
               <Col md={1} className="text-end">
                 <Button
                   variant="outline-secondary"
@@ -338,12 +398,15 @@ export default function AdHocEmailMonitor() {
               </Col>
             </Row>
           ))}
-          <div className="d-flex gap-2">
+          <div className="d-flex gap-2 flex-wrap">
             <Button variant="outline-primary" size="sm" onClick={addAppleMail}>
               + Add Apple Mail
             </Button>
             <Button variant="outline-primary" size="sm" onClick={addGmailImap}>
-              + Add Gmail
+              + Add Gmail (App Password)
+            </Button>
+            <Button variant="outline-primary" size="sm" onClick={addGmailOAuth}>
+              + Add Gmail (connected workspace account)
             </Button>
           </div>
         </Card.Body>

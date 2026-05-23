@@ -69,10 +69,11 @@ TEST_PER_ACCOUNT_TIMEOUT_SECONDS = 10.0
 
 
 class AdHocAccountIn(BaseModel):
-    service: str  # "apple_mail" | "gmail_imap"  (gmail-OAuth not surfaced in ad-hoc)
-    account: Optional[str] = None     # apple_mail
-    email: Optional[str] = None       # gmail_imap
+    service: str  # "apple_mail" | "gmail_imap" | "gmail"
+    account: Optional[str] = None     # apple_mail (Mail.app account name)
+    email: Optional[str] = None       # gmail_imap (email address)
     app_password: Optional[str] = None  # gmail_imap — STORED_SENTINEL means keep existing
+    account_id: Optional[int] = None  # gmail (FK into gmail_accounts.id)
 
 
 class AdHocAccountOut(BaseModel):
@@ -80,6 +81,7 @@ class AdHocAccountOut(BaseModel):
     account: Optional[str] = None
     email: Optional[str] = None
     app_password: Optional[str] = None  # always STORED_SENTINEL or None on the way out
+    account_id: Optional[int] = None    # gmail OAuth account id (no secrets in this value)
 
 
 class AdHocEmailMonitorRead(BaseModel):
@@ -130,6 +132,7 @@ def _redact_config(config: dict) -> dict:
             "service": acct.get("service"),
             "account": acct.get("account"),
             "email": acct.get("email"),
+            "account_id": acct.get("account_id"),
         }
         if acct.get("service") == "gmail_imap":
             # If we have a stored password (DB blob present OR plaintext-file
@@ -145,6 +148,10 @@ def _redact_config(config: dict) -> dict:
                 clone["app_password"] = STORED_SENTINEL
             elif acct.get("app_password_enc"):
                 clone["app_password"] = STORED_SENTINEL
+        # gmail (Workspace OAuth) carries no per-account secrets in the
+        # workflow config — credentials live in the gmail_accounts table
+        # behind account_id, managed by /api/v1/gmail/oauth/*. Nothing to
+        # redact.
         accounts_out.append({k: v for k, v in clone.items() if v is not None})
     out["accounts"] = accounts_out
     # Don't surface the encrypted blobs in the wire format.
@@ -237,6 +244,18 @@ def _apply_write_to_workflow(workflow: UserWorkflows, body: AdHocEmailMonitorWri
                         break
             new_accounts.append(row)
             continue
+        if in_acct.service == "gmail":
+            # Workspace OAuth account — credentials live in gmail_accounts,
+            # we only persist the account_id reference. The runner's
+            # existing gmail-OAuth path (gmail_client.gmail_list_messages)
+            # handles auth + refresh.
+            if not isinstance(in_acct.account_id, int):
+                continue
+            new_accounts.append({
+                "service": "gmail",
+                "account_id": in_acct.account_id,
+            })
+            continue
         # unknown service silently dropped — frontend shouldn't send these
     workflow.config = {
         "storage_method": new_storage,
@@ -328,7 +347,12 @@ async def run_email_topic_monitor(
     return _serialize_read(workflow)
 
 
-async def _test_one_account(label: str, account: dict, workflow: UserWorkflows) -> TestAccountResult:
+async def _test_one_account(
+    label: str,
+    account: dict,
+    workflow: UserWorkflows,
+    session: AsyncSession,
+) -> TestAccountResult:
     service = account.get("service")
     try:
         if service == "apple_mail":
@@ -349,6 +373,24 @@ async def _test_one_account(label: str, account: dict, workflow: UserWorkflows) 
                 )
             ok, reason = await gmail_imap_client.imap_test_login(email, password)
             return TestAccountResult(label=label, ok=ok, reason=reason)
+        if service == "gmail":
+            # Workspace OAuth account — credentials live in the
+            # gmail_accounts table behind account_id. Cheapest probe: list
+            # one message via the API; if the refresh token has expired or
+            # the row is missing/disconnected, gmail_client surfaces a
+            # specific exception we relay verbatim.
+            from backend.services import gmail_client
+            account_id = account.get("account_id")
+            if not isinstance(account_id, int):
+                return TestAccountResult(
+                    label=label, ok=False,
+                    reason="Workspace Gmail account is missing its account_id reference.",
+                )
+            await gmail_client.gmail_list_messages(
+                session, account_id, mailbox="INBOX", limit=1,
+                workflow_id=workflow.workflow_id, run_id=None,
+            )
+            return TestAccountResult(label=label, ok=True, reason="ok")
         return TestAccountResult(label=label, ok=False, reason=f"Unknown service {service!r}")
     except Exception as exc:
         return TestAccountResult(label=label, ok=False, reason=str(exc))
@@ -397,7 +439,7 @@ async def test_email_topic_monitor(
 
     tasks = [
         asyncio.wait_for(
-            _test_one_account(label, account, workflow),
+            _test_one_account(label, account, workflow, session),
             timeout=TEST_PER_ACCOUNT_TIMEOUT_SECONDS,
         )
         for label, account in zip(labels, accounts)
