@@ -445,6 +445,14 @@ async def test_email_topic_monitor(
         for label, account in zip(labels, accounts)
     ]
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Persist any session-side mutations the per-account tests produced.
+    # The gmail (OAuth) probe calls into gmail_client._ensure_fresh_credentials,
+    # which on refresh failure sets the account's status to "disconnected"
+    # and flushes — but without an explicit commit here, FastAPI's session
+    # dependency closes the session and the change rolls back. That left
+    # the Connections page showing "active" even after Test reported the
+    # account dead. Commit now so the status flip survives.
+    await session.commit()
     results: list[TestAccountResult] = []
     for label, r in zip(labels, raw_results):
         if isinstance(r, asyncio.TimeoutError):
