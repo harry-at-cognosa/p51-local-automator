@@ -342,10 +342,14 @@ async def run_email_monitor(
                 "source_account": email.get("source_account", ""),
             })
 
-        # Save JSON
+        # Save JSON (wrapped so it self-identifies on disk).
+        from backend.services.artifact_meta import build_artifact_meta, wrap_json
+        json_meta = build_artifact_meta(
+            workflow, run, kind="json", filename="email_categorized.json",
+        )
         json_path = os.path.join(output_dir, "email_categorized.json")
         with open(json_path, "w") as f:
-            json.dump(output_emails, f, indent=2)
+            json.dump(wrap_json(json_meta, output_emails), f, indent=2)
 
         await engine.record_artifact(session, run.run_id, step2.step_id, json_path, "json", "Categorized email data")
 

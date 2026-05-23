@@ -116,11 +116,32 @@ async def run_sql_runner(
 
         rows, cols = df.shape
 
-        # Save results
+        # Save results — each artifact gets a meta block embedded so it
+        # self-identifies on disk (csv: #-comment header lines; xlsx:
+        # Provenance sheet inserted as the first sheet).
+        from backend.services.artifact_meta import (
+            build_artifact_meta, wrap_csv_bytes, wrap_excel_workbook,
+        )
         csv_path = os.path.join(output_dir, f"{query_name}_results.csv")
         xlsx_path = os.path.join(output_dir, f"{query_name}_results.xlsx")
-        df.to_csv(csv_path, index=False)
-        df.to_excel(xlsx_path, index=False)
+
+        csv_meta = build_artifact_meta(
+            workflow, run, kind="csv", filename=f"{query_name}_results.csv",
+        )
+        csv_body = df.to_csv(index=False)
+        with open(csv_path, "w") as f:
+            f.write(wrap_csv_bytes(csv_meta, csv_body))
+
+        # For xlsx: pandas writes the data, then we open with openpyxl
+        # to inject a Provenance sheet as the first sheet.
+        xlsx_meta = build_artifact_meta(
+            workflow, run, kind="xlsx", filename=f"{query_name}_results.xlsx",
+        )
+        df.to_excel(xlsx_path, index=False, sheet_name="Results")
+        import openpyxl
+        wb = openpyxl.load_workbook(xlsx_path)
+        wrap_excel_workbook(xlsx_meta, wb)
+        wb.save(xlsx_path)
 
         await engine.record_artifact(session, run.run_id, step1.step_id, csv_path, "csv", f"Query results ({rows} rows)")
         await engine.record_artifact(session, run.run_id, step1.step_id, xlsx_path, "xlsx", f"Query results ({rows} rows)")
@@ -168,9 +189,13 @@ Sample data (first {sample_rows} rows):
         usage = llm_result["usage"]
         total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
+        from backend.services.artifact_meta import wrap_json
+        analysis_meta = build_artifact_meta(
+            workflow, run, kind="json", filename=f"{query_name}_analysis.json",
+        )
         analysis_path = os.path.join(output_dir, f"{query_name}_analysis.json")
         with open(analysis_path, "w") as f:
-            json.dump(analysis, f, indent=2)
+            json.dump(wrap_json(analysis_meta, analysis), f, indent=2)
 
         await engine.record_artifact(session, run.run_id, step2.step_id, analysis_path, "json", "LLM analysis")
 

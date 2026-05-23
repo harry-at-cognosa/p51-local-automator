@@ -35,6 +35,77 @@ def format_date_for_mcp(dt: datetime) -> str:
     return dt.strftime("%-d %B %Y")
 
 
+def _fmt_event_when(event: dict) -> str:
+    """Render an event's date/time for the markdown digest."""
+    raw = event.get("date") or ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return raw or "(no date)"
+    return dt.strftime("%a %b %d  %H:%M")
+
+
+def _render_calendar_digest_md(output: dict) -> str:
+    """Render the JSON digest as a human-readable markdown report:
+    LLM summary at top, then highlights (conflicts + urgent items),
+    then chronological event list grouped by calendar."""
+    lines: list[str] = []
+    period = output.get("period") or "(period unknown)"
+    lines.append(f"# Calendar Digest — {period}")
+    lines.append("")
+
+    summary = (output.get("summary") or "").strip()
+    if summary:
+        lines.append("## Summary")
+        lines.append(summary)
+        lines.append("")
+
+    conflicts = output.get("conflicts") or []
+    urgent = output.get("urgent_items") or []
+    if conflicts or urgent:
+        lines.append("## Highlights")
+        for c in conflicts:
+            if isinstance(c, dict):
+                desc = c.get("description") or "(no description)"
+                lines.append(f"- Conflict: {desc}")
+        for u in urgent:
+            if isinstance(u, str):
+                lines.append(f"- Urgent: {u}")
+            elif isinstance(u, dict):
+                lines.append(f"- Urgent: {u.get('description') or u}")
+        lines.append("")
+
+    events = output.get("events") or []
+    by_cal: dict[str, list[dict]] = {}
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        cal = e.get("calendar") or "(unspecified)"
+        by_cal.setdefault(cal, []).append(e)
+    for cal in sorted(by_cal):
+        lines.append(f"## {cal}")
+        evs = sorted(by_cal[cal], key=lambda x: x.get("date") or "")
+        for e in evs:
+            when = _fmt_event_when(e)
+            title = (e.get("summary") or "(no title)").strip()
+            location = (e.get("location") or "").strip()
+            tags: list[str] = []
+            if e.get("conflict"):
+                tags.append("⚠ conflict")
+            importance = e.get("importance") or "normal"
+            if importance and importance != "normal":
+                tags.append(importance)
+            tag_str = f"  [{', '.join(tags)}]" if tags else ""
+            loc_str = f"  ({location})" if location else ""
+            lines.append(f"- {when}  {title}{loc_str}{tag_str}")
+            notes = (e.get("notes") or "").strip()
+            if notes:
+                lines.append(f"    > {notes}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 async def _fetch_events_apple(
     config: dict, days: int, now: datetime, end: datetime
 ) -> tuple[list[dict], list[str], str, str]:
@@ -212,11 +283,34 @@ Return ONLY the JSON, no other text."""
             "events": output_events,
         }
 
+        # Markdown companion artifact, written FIRST so it sorts at the
+        # top of the run's artifacts table. JSON is retained as the
+        # machine-readable secondary form.
+        from backend.services.artifact_meta import (
+            build_artifact_meta, wrap_json, wrap_markdown,
+        )
+        md_meta = build_artifact_meta(
+            workflow, run, kind="md", filename="calendar_digest.md",
+        )
+        md_body = _render_calendar_digest_md(output)
+        md_path = os.path.join(output_dir, "calendar_digest.md")
+        with open(md_path, "w") as f:
+            f.write(wrap_markdown(md_meta, md_body))
+        await engine.record_artifact(
+            session, run.run_id, step2.step_id, md_path, "md",
+            "Human-readable calendar digest",
+        )
+
+        json_meta = build_artifact_meta(
+            workflow, run, kind="json", filename="calendar_digest.json",
+        )
         json_path = os.path.join(output_dir, "calendar_digest.json")
         with open(json_path, "w") as f:
-            json.dump(output, f, indent=2)
-
-        await engine.record_artifact(session, run.run_id, step2.step_id, json_path, "json", "Calendar digest data")
+            json.dump(wrap_json(json_meta, output), f, indent=2)
+        await engine.record_artifact(
+            session, run.run_id, step2.step_id, json_path, "json",
+            "Calendar digest data (machine-readable)",
+        )
 
         conflict_count = len(analysis.get("conflicts", []))
         urgent_count = len(analysis.get("urgent_items", []))

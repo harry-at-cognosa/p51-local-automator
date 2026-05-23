@@ -122,38 +122,43 @@ async def run_email_auto_reply_draft(
             session, workflow.group_id, workflow.user_id, workflow.workflow_id, run.run_id
         )
         import os
+        from io import StringIO
+        from backend.services.artifact_meta import build_artifact_meta, wrap_csv_bytes
         log_path = os.path.join(output_dir, "drafts_saved.txt")
+        buf = StringIO()
+        buf.write(f"Auto-Reply (Draft Only) — run #{run.run_id}\n")
+        buf.write(f"Workflow: #{workflow.workflow_id}  {workflow.name}\n")
+        buf.write(f"Account: {location_label}\n")
+        buf.write(f"Saved: {saved} / {len(candidates)}\n")
+        if covered_total:
+            buf.write(f"Older sibling messages folded in (dedup'd): {covered_total}\n")
+        buf.write("\n")
+        for i, c in enumerate(candidates, start=1):
+            buf.write("=" * 72 + "\n")
+            buf.write(f"Draft {i} of {len(candidates)}\n")
+            buf.write(f"  To:               {c.to_address}\n")
+            buf.write(f"  Subject:          {c.reply_subject}\n")
+            buf.write(f"  Source from:      {c.source_from}\n")
+            buf.write(f"  Source subject:   {c.source_subject}\n")
+            buf.write(f"  Winner msg id:    {c.source_message_id}\n")
+            if c.additional_handled_message_ids:
+                buf.write(
+                    f"  Covered msg ids:  {', '.join(c.additional_handled_message_ids)}\n"
+                )
+            buf.write(f"  LLM tokens:       {c.llm_tokens}\n")
+            buf.write("\n  Source body (first 400 chars):\n")
+            preview = (c.source_body or "")[:400].rstrip()
+            for line in preview.splitlines() or [""]:
+                buf.write(f"    | {line}\n")
+            if len(c.source_body or "") > 400:
+                buf.write(f"    | … (truncated, total {len(c.source_body)} chars)\n")
+            buf.write("\n  Generated reply body:\n")
+            for line in (c.reply_body or "").splitlines() or [""]:
+                buf.write(f"    | {line}\n")
+            buf.write("\n")
+        meta = build_artifact_meta(workflow, run, kind="txt", filename="drafts_saved.txt")
         with open(log_path, "w") as f:
-            f.write(f"Auto-Reply (Draft Only) — run #{run.run_id}\n")
-            f.write(f"Workflow: #{workflow.workflow_id}  {workflow.name}\n")
-            f.write(f"Account: {location_label}\n")
-            f.write(f"Saved: {saved} / {len(candidates)}\n")
-            if covered_total:
-                f.write(f"Older sibling messages folded in (dedup'd): {covered_total}\n")
-            f.write("\n")
-            for i, c in enumerate(candidates, start=1):
-                f.write("=" * 72 + "\n")
-                f.write(f"Draft {i} of {len(candidates)}\n")
-                f.write(f"  To:               {c.to_address}\n")
-                f.write(f"  Subject:          {c.reply_subject}\n")
-                f.write(f"  Source from:      {c.source_from}\n")
-                f.write(f"  Source subject:   {c.source_subject}\n")
-                f.write(f"  Winner msg id:    {c.source_message_id}\n")
-                if c.additional_handled_message_ids:
-                    f.write(
-                        f"  Covered msg ids:  {', '.join(c.additional_handled_message_ids)}\n"
-                    )
-                f.write(f"  LLM tokens:       {c.llm_tokens}\n")
-                f.write("\n  Source body (first 400 chars):\n")
-                preview = (c.source_body or "")[:400].rstrip()
-                for line in preview.splitlines() or [""]:
-                    f.write(f"    | {line}\n")
-                if len(c.source_body or "") > 400:
-                    f.write(f"    | … (truncated, total {len(c.source_body)} chars)\n")
-                f.write("\n  Generated reply body:\n")
-                for line in (c.reply_body or "").splitlines() or [""]:
-                    f.write(f"    | {line}\n")
-                f.write("\n")
+            f.write(wrap_csv_bytes(meta, buf.getvalue()))
         await engine.record_artifact(session, run.run_id, step_log.step_id, log_path, "txt", "Drafts saved log")
         await engine.complete_step(session, step_log, output_summary=f"Wrote {log_path}")
 
