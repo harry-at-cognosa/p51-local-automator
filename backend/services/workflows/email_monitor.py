@@ -28,7 +28,8 @@ from backend.services import gmail_password_store
 from backend.services import llm_service
 from backend.services import workflow_engine as engine
 from backend.services.logger_service import get_logger
-from backend.db.models import UserWorkflows, WorkflowRuns
+from backend.db.models import GmailAccounts, UserWorkflows, WorkflowRuns
+from sqlalchemy import select
 
 log = get_logger("email_monitor")
 
@@ -142,10 +143,38 @@ def _account_label(account: dict) -> str:
     if service == "apple_mail":
         return f"apple_mail/{account.get('account', 'iCloud')}"
     if service == "gmail":
+        # Prefer the looked-up email (enriched by _enrich_gmail_emails at run
+        # time) so the run summary reads gmail/h@cognosa.net rather than
+        # gmail#1. Falls back to the FK id when the lookup didn't happen
+        # (e.g. the account_id no longer points at a row).
+        email = account.get("email") or account.get("_resolved_email")
+        if email:
+            return f"gmail/{email}"
         return f"gmail#{account.get('account_id', '?')}"
     if service == "gmail_imap":
         return f"gmail_imap/{account.get('email', '?')}"
     return service or "unknown"
+
+
+async def _enrich_gmail_emails(session, accounts: list[dict]) -> None:
+    """Look up the email address for each gmail (Workspace OAuth) account
+    so per-account run summaries can show the actual email instead of
+    the FK id. Mutates the dicts in place; no-op if no gmail rows."""
+    ids = [
+        a.get("account_id") for a in accounts
+        if a.get("service") == "gmail" and isinstance(a.get("account_id"), int)
+    ]
+    if not ids:
+        return
+    rows = (await session.execute(
+        select(GmailAccounts.id, GmailAccounts.email).where(GmailAccounts.id.in_(ids))
+    )).all()
+    by_id = {rid: email for rid, email in rows}
+    for a in accounts:
+        if a.get("service") == "gmail":
+            aid = a.get("account_id")
+            if isinstance(aid, int) and aid in by_id:
+                a["_resolved_email"] = by_id[aid]
 
 
 async def _fetch_account(
@@ -203,6 +232,7 @@ async def run_email_monitor(
     scope = config.get("scope", "")
 
     accounts = _resolve_accounts(config)
+    await _enrich_gmail_emails(session, accounts)
 
     fetch_limit = (
         await engine.resolve_int_setting(
