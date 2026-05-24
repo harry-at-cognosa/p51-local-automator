@@ -68,17 +68,53 @@ def _normalize_secrets_in_config(
     `connection_string_enc` from the prior config — so editing
     unrelated fields (query, query_name) doesn't wipe the secret.
 
+    For type 1 (Email Topic Monitor) with `service == "gmail_imap"`:
+    same blank-to-preserve treatment for the `app_password` field —
+    either encrypted into `app_password_enc` (encrypted_db) or routed
+    to the shared `.gmailpasswords.json` via gmail_password_store
+    (plaintext_file). Reuses the same Type 4 idiom so the form's
+    masked-secret placeholder ("(stored — leave blank to keep)")
+    behaves consistently.
+
     For other types: passthrough.
     """
-    if type_id != 4 or not config:
+    if not config:
         return config
-    config = dict(config)
-    cs = config.get("connection_string", "")
-    if cs:
-        config["connection_string_enc"] = crypto.encrypt_to_b64(cs)
-    elif existing_config and existing_config.get("connection_string_enc"):
-        config["connection_string_enc"] = existing_config["connection_string_enc"]
-    config.pop("connection_string", None)
+    if type_id == 4:
+        config = dict(config)
+        cs = config.get("connection_string", "")
+        if cs:
+            config["connection_string_enc"] = crypto.encrypt_to_b64(cs)
+        elif existing_config and existing_config.get("connection_string_enc"):
+            config["connection_string_enc"] = existing_config["connection_string_enc"]
+        config.pop("connection_string", None)
+        return config
+    if type_id == 1 and config.get("service") == "gmail_imap":
+        config = dict(config)
+        storage = config.get("storage_method", "encrypted_db")
+        pw = config.get("app_password", "")
+        email_addr = (config.get("email") or "").strip()
+        if storage == "plaintext_file":
+            # Plaintext file backend: route the typed password (if any) to
+            # the shared .gmailpasswords.json via the existing helper.
+            # Drop any stale app_password_enc so the runner doesn't pick
+            # up a leftover encrypted blob.
+            if pw and email_addr:
+                from backend.services.gmail_password_store import _load_file_locked, _write_file_locked, _strip
+                data = _load_file_locked()
+                data[email_addr] = _strip(pw)
+                _write_file_locked(data)
+            config.pop("app_password_enc", None)
+        else:
+            # encrypted_db (default): encrypt typed password; if blank,
+            # preserve the existing _enc blob so unrelated edits (period,
+            # topics, schedule) don't wipe the password.
+            if pw:
+                config["app_password_enc"] = crypto.encrypt_to_b64(pw)
+            elif existing_config and existing_config.get("app_password_enc"):
+                config["app_password_enc"] = existing_config["app_password_enc"]
+        config.pop("app_password", None)
+        return config
     return config
 
 

@@ -114,10 +114,18 @@ def get_app_password(workflow: UserWorkflows, email_addr: str) -> Optional[str]:
     """Return the 16-char app password for the given email under this
     workflow's storage method, or None if not present.
 
-    encrypted_db: look up the matching accounts[] entry by email and
-    decrypt its `app_password_enc` via secrets.decrypt_from_b64.
+    Supports two config shapes:
 
-    plaintext_file: load .gmailpasswords.json and return data.get(email).
+      - accounts[] list (ad-hoc Email Topic Monitor): per-account
+        entries with their own service / email / app_password_enc.
+
+      - top-level single account (regular Type 1 workflow with
+        service=gmail_imap): config.email + config.app_password_enc
+        (encrypted_db) OR config.email with no _enc field
+        (plaintext_file, looked up via .gmailpasswords.json).
+
+    Plaintext-file backend is shared across both shapes — it's a
+    per-machine credential store keyed by email.
     """
     config = workflow.config or {}
     storage = config.get("storage_method", "encrypted_db")
@@ -125,7 +133,7 @@ def get_app_password(workflow: UserWorkflows, email_addr: str) -> Optional[str]:
         data = _load_file_locked()
         pw = data.get(email_addr)
         return _strip(pw) if pw else None
-    # default → encrypted_db
+    # default → encrypted_db. Try accounts[] (ad-hoc) first…
     for acct in config.get("accounts", []) or []:
         if not isinstance(acct, dict):
             continue
@@ -142,6 +150,25 @@ def get_app_password(workflow: UserWorkflows, email_addr: str) -> Optional[str]:
                     error=str(exc),
                 )
                 return None
+    # …then fall back to the top-level single-account shape used by
+    # regular Type 1 workflows (one workflow row per consumer Gmail
+    # account, schedulable).
+    if (
+        config.get("service") == "gmail_imap"
+        and config.get("email") == email_addr
+    ):
+        blob = config.get("app_password_enc")
+        if not blob:
+            return None
+        try:
+            return _strip(secrets.decrypt_from_b64(blob))
+        except RuntimeError as exc:
+            log.warning(
+                "gmail_imap_password_decrypt_failed",
+                email=email_addr,
+                error=str(exc),
+            )
+            return None
     return None
 
 
