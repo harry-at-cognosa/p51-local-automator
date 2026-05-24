@@ -292,24 +292,44 @@ the Mac to sleep, it wakes itself before 6 AM.
 
 ---
 
-## 6. Automation permissions (one-time, interactive)
+## 6. Automation permissions (one-time, interactive) — Apple Mail/Calendar only
 
-The first time the backend's MCP subprocess drives Mail.app or Calendar.app,
-macOS shows an **Automation** permission prompt. If the process is running
-headless under launchd, the prompt may appear at the next GUI interaction or
-the AppleScript call silently fails until granted.
+This applies **only** to workflows whose `service` is `apple_mail` or
+`apple_calendar` — they drive Mail.app / Calendar.app via AppleScript, which
+macOS gates behind an **Automation** permission. Workflows on `gmail` or
+`google_calendar` talk to Google over HTTPS with OAuth and need **no** TCC
+permission at all (only a valid OAuth token).
 
-Grant it once, interactively, while logged in:
+**Who the grant is attributed to.** macOS ties an Automation grant to the
+*process that sends the Apple events*. Under the LaunchAgent that's the
+backend's **python** interpreter — NOT Terminal. So a grant that shows up under
+"Terminal" (from running something in a shell) does **not** cover the scheduled
+run; you need it under **python**. In System Settings → Privacy & Security →
+**Automation**, grants are grouped by the requesting app — expand the **python**
+entry and you'll find the per-target toggles for **Mail** and **Calendar**.
+(This is why a grant can be "not where you expected" but the workflow still
+runs: it's filed under python, not the app you were looking at.)
 
-- System Settings → Privacy & Security → **Automation** → enable the entries
-  that let the p51 process (or its parent, e.g., the terminal/launchd context)
-  control **Mail** and **Calendar**.
-- Also check **Privacy & Security → Full Disk Access** if Mail database reads
+**The catch with 6 AM:** an Automation prompt can only be answered by a human at
+the keyboard. If the grant isn't already established when the scheduler fires
+unattended, the AppleScript fails — usually *silently* (look for
+`errAEEventNotPermitted` / `-1743` in `logs/uvicorn.err.log`, or a digest that
+comes back empty).
+
+**So establish the grant the right way, once:** while sitting at the machine,
+run one `apple_mail` (Type 1) and one `apple_calendar` (Type 3) workflow **from
+the web UI at `:8000/app`** — that UI is served by the launchd backend, so the
+prompt is for the *same python* that fires at 6 AM. Approve each. The grant
+persists, and every scheduled run thereafter works with no one present.
+(Triggering the workflow from a Terminal instead grants Terminal, not the
+launchd python — the classic reason Apple automation "works when I test it but
+not on the schedule.")
+
+- Also check **Privacy & Security → Full Disk Access** if Mail *database* reads
   are blocked.
-
-The cleanest way to trigger the prompts is to run one Type 1 (email) and one
-Type 3 (calendar) workflow manually via the UI right after first install, while
-sitting at the machine, and approve each prompt as it appears.
+- Grants can be wiped by a macOS update or by re-signing/replacing the python
+  binary; afterward the next unattended run fails silently until you re-approve.
+  Re-run the manual UI test after any such change.
 
 ---
 
