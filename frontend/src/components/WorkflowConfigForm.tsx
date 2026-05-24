@@ -279,14 +279,21 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
 
   const handleServiceChange = (newService: string) => {
     // Switching service clears the per-service identifier so we don't carry
-    // an apple_mail account string into a gmail-flavored run (or vice versa).
+    // an apple_mail account string, a gmail OAuth account_id, or a
+    // gmail_imap email into the wrong-service run.
     const next: Record<string, unknown> = { ...config, service: newService };
     delete next.account;
     delete next.account_id;
+    delete next.email;
+    delete next.app_password;
+    // app_password_enc and storage_method are intentionally preserved across
+    // a service flip so the user doesn't lose a stored credential by toggling
+    // accidentally. The runner ignores them when service != gmail_imap.
     onChange(next);
   };
 
   const activeGmailAccounts = gmailAccounts.filter((a) => a.status === "active");
+  const hasStoredAppPassword = Boolean(config.app_password_enc);
 
   return (
     <>
@@ -299,39 +306,15 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
               onChange={(e) => handleServiceChange(e.target.value)}
             >
               <option value="apple_mail">Apple Mail</option>
-              <option value="gmail">Gmail (Workspace)</option>
+              <option value="gmail">Gmail (connected workspace account)</option>
+              <option value="gmail_imap">Gmail (App Password — for consumer Gmail)</option>
             </Form.Select>
           </Form.Group>
         </Col>
         <Col md={6}>
-          <Form.Group>
-            <Form.Label>{service === "gmail" ? "Gmail Account" : "Mail Account"}</Form.Label>
-            {service === "gmail" ? (
-              <>
-                <Form.Select
-                  value={(config.account_id as number | undefined) ?? ""}
-                  onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
-                  disabled={gmailLoading || activeGmailAccounts.length === 0}
-                >
-                  <option value="">
-                    {gmailLoading
-                      ? "Loading…"
-                      : activeGmailAccounts.length === 0
-                      ? "(no accounts connected)"
-                      : "Select a connected account…"}
-                  </option>
-                  {activeGmailAccounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.email}</option>
-                  ))}
-                </Form.Select>
-                {gmailError && <Form.Text className="text-danger">{gmailError}</Form.Text>}
-                {!gmailLoading && !gmailError && activeGmailAccounts.length === 0 && (
-                  <Form.Text className="text-muted">
-                    No Gmail accounts connected yet — visit Connections to add one.
-                  </Form.Text>
-                )}
-              </>
-            ) : (
+          {service === "apple_mail" && (
+            <Form.Group>
+              <Form.Label>Mail Account</Form.Label>
               <Form.Select
                 value={(config.account as string) || "iCloud"}
                 onChange={(e) => set("account", e.target.value)}
@@ -340,17 +323,112 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
                   <option key={a.value} value={a.value}>{a.label}</option>
                 ))}
               </Form.Select>
-            )}
-          </Form.Group>
+            </Form.Group>
+          )}
+          {service === "gmail" && (
+            <Form.Group>
+              <Form.Label>Gmail Account</Form.Label>
+              <Form.Select
+                value={(config.account_id as number | undefined) ?? ""}
+                onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
+                disabled={gmailLoading || activeGmailAccounts.length === 0}
+              >
+                <option value="">
+                  {gmailLoading
+                    ? "Loading…"
+                    : activeGmailAccounts.length === 0
+                    ? "(no accounts connected)"
+                    : "Select a connected account…"}
+                </option>
+                {activeGmailAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.email}</option>
+                ))}
+              </Form.Select>
+              {gmailError && <Form.Text className="text-danger">{gmailError}</Form.Text>}
+              {!gmailLoading && !gmailError && activeGmailAccounts.length === 0 && (
+                <Form.Text className="text-muted">
+                  No Gmail accounts connected yet — visit Connections to add one.
+                </Form.Text>
+              )}
+            </Form.Group>
+          )}
+          {service === "gmail_imap" && (
+            <Form.Group>
+              <Form.Label>Gmail address</Form.Label>
+              <Form.Control
+                type="email"
+                value={(config.email as string) || ""}
+                placeholder="you@gmail.com"
+                onChange={(e) => set("email", e.target.value)}
+              />
+            </Form.Group>
+          )}
         </Col>
+        {service === "gmail_imap" && (
+          <>
+            <Col md={6}>
+              <Form.Group>
+                <Form.Label>
+                  App password
+                  <a
+                    href="https://myaccount.google.com/apppasswords"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ms-2"
+                    style={{ fontSize: "0.85em" }}
+                  >
+                    get one
+                  </a>
+                </Form.Label>
+                <Form.Control
+                  type="password"
+                  value={(config.app_password as string) || ""}
+                  placeholder={
+                    hasStoredAppPassword
+                      ? "(stored — leave blank to keep, or type to replace)"
+                      : "16-char code"
+                  }
+                  onChange={(e) => set("app_password", e.target.value)}
+                />
+                {hasStoredAppPassword && (
+                  <Form.Text className="text-muted">
+                    Password is stored encrypted. The original value is not
+                    displayed. Leave blank to keep; type a new value to replace.
+                  </Form.Text>
+                )}
+              </Form.Group>
+            </Col>
+            <Col md={6}>
+              <Form.Group>
+                <Form.Label>Credential storage</Form.Label>
+                <Form.Check
+                  type="radio"
+                  id="t1-storage-enc"
+                  name="t1_storage_method"
+                  label="Encrypted database column (recommended)"
+                  checked={((config.storage_method as string) || "encrypted_db") === "encrypted_db"}
+                  onChange={() => set("storage_method", "encrypted_db")}
+                />
+                <Form.Check
+                  type="radio"
+                  id="t1-storage-plain"
+                  name="t1_storage_method"
+                  label="Plaintext .gmailpasswords.json (per-machine)"
+                  checked={(config.storage_method as string) === "plaintext_file"}
+                  onChange={() => set("storage_method", "plaintext_file")}
+                />
+              </Form.Group>
+            </Col>
+          </>
+        )}
         <Col md={6}>
           <Form.Group>
-            <Form.Label>{service === "gmail" ? "Label" : "Mailbox"}</Form.Label>
+            <Form.Label>{service === "apple_mail" ? "Mailbox" : "Label"}</Form.Label>
             <Form.Control
               value={(config.mailbox as string) || "INBOX"}
               onChange={(e) => set("mailbox", e.target.value)}
             />
-            {service === "gmail" && (
+            {service !== "apple_mail" && (
               <Form.Text className="text-muted">
                 Gmail label id (e.g. INBOX, SPAM, or a custom label).
               </Form.Text>
