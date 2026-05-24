@@ -119,19 +119,28 @@ Use a **LaunchAgent** (runs in the user's GUI session) rather than a
 LaunchDaemon (runs headless at boot) — because of the Apple automation
 requirement from §2.
 
-### 3a. The nvm/PATH gotcha
+### 3a. The node/PATH gotcha
 
 The MCP servers are spawned by the backend via `npx`, so `node`/`npx` must be
-on the PATH of the launchd process. **launchd does not source `~/.zshrc`**, so
-the nvm shims are not active. You must put the node bin directory on the
-LaunchAgent's PATH explicitly.
+on the PATH of the launchd process. **launchd does not source `~/.zshrc` or
+`~/.zprofile`**, so whatever makes node available in your interactive shell —
+nvm shims, Homebrew, an official-installer entry — is *not* active here. You
+must put the node bin directory on the LaunchAgent's PATH explicitly.
 
-Find your node bin dir:
+Find your node bin dir (works regardless of how node was installed):
 
 ```bash
-source ~/.nvm/nvm.sh && nvm use >/dev/null 2>&1 && dirname "$(which node)"
-# e.g. /Users/harryatmac/.nvm/versions/node/v25.4.0/bin
+dirname "$(command -v node)"
+# Homebrew install →  /opt/homebrew/bin
+# nvm install      →  /Users/<user>/.nvm/versions/node/v25.4.0/bin
 ```
+
+> If node came from **Homebrew** (`/opt/homebrew/bin`), that directory is
+> already in the example PATH below, so you don't need a separate node segment —
+> just delete the `~/.nvm/...` entry from it. If node came from **nvm**, keep
+> the versioned `.nvm/.../bin` path and update it whenever you bump the pinned
+> node version. (There is no `~/.nvm/nvm.sh` on a Homebrew-node machine — that's
+> expected, not a missed step.)
 
 ### 3b. The plist
 
@@ -188,25 +197,49 @@ Create `~/Library/LaunchAgents/net.cognosa.p51.plist`:
 
 > `--host 0.0.0.0` exposes the backend on the LAN (so other machines on the
 > network can reach it). If the Mac Mini should serve only itself, use
-> `127.0.0.1`. The `.nvmrc` version (currently `v25.4.0`) is baked into the
-> PATH above — update it if you bump the pinned node version.
+> `127.0.0.1`. The example PATH above shows the **nvm** node segment
+> (`.nvm/.../v25.4.0/bin`); on a **Homebrew** node install that segment is
+> unnecessary because `/opt/homebrew/bin` (already present) holds node — see
+> §3a. Either way, keep the node path in sync with your actual install.
 
 ### 3c. Load it
 
 ```bash
 mkdir -p /Users/harryatmac/p51-local-automator/logs
-launchctl load -w ~/Library/LaunchAgents/net.cognosa.p51.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.cognosa.p51.plist
+launchctl list | grep p51    # expect: <PID>  0  net.cognosa.p51
 ```
 
-`-w` marks it enabled persistently. To stop/reload after editing the plist:
+A per-user LaunchAgent is bootstrapped into **your own GUI domain**
+(`gui/$(id -u)`) — run it **as yourself, never with `sudo`**. `sudo` runs as
+root, which can't reach your GUI session's domain and fails with
+`Bootstrap failed: 5: Input/output error` (launchctl will even suggest re-running
+as root "for richer errors" — ignore that, root is the wrong direction here).
+
+To reload after editing the plist:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/net.cognosa.p51.plist
-launchctl load   -w ~/Library/LaunchAgents/net.cognosa.p51.plist
+# If you only changed runtime behavior, a restart of the running job is enough:
+launchctl kickstart -k gui/$(id -u)/net.cognosa.p51
+
+# If you changed load-time keys (ProgramArguments, PATH, file paths), re-bootstrap:
+launchctl bootout   gui/$(id -u)/net.cognosa.p51
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.cognosa.p51.plist
 ```
 
-(On newer macOS you may prefer the `launchctl bootstrap gui/$(id -u) <plist>`
-/ `bootout` syntax; `load`/`unload` still work.)
+> **Gotcha (learned the hard way):** the legacy `launchctl load -w` / `unload`
+> commands **silently no-op** when a job with that label is already registered —
+> `load` says nothing and never re-reads your edited plist, so you keep running
+> the *stale* definition. Symptom: `launchctl list | grep p51` shows the job
+> stuck (PID `-`, nonzero exit) and a fresh `bootout`/`bootstrap` returns
+> `5: Input/output error` because the label is still registered. Clear it with
+> the legacy remover, confirm it's gone, then bootstrap fresh:
+>
+> ```bash
+> launchctl remove net.cognosa.p51            # clears a legacy-loaded registration
+> launchctl list | grep p51                   # must print NOTHING before continuing
+> launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.cognosa.p51.plist
+> ```
 
 ### 3d. Verify it's running
 
