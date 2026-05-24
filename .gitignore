@@ -31,6 +31,10 @@ logs/
 # Microsoft Office lock files (created while a document is open, removed on close)
 ~$*
 
+# Editor swap/backup files (vim, etc.)
+*.swp
+*.swo
+
 # Ad-hoc Email Topic Monitor — plaintext app-password file (alternate
 # storage backend; per-machine, never source-controlled).
 .gmailpasswords.json
