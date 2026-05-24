@@ -18,6 +18,7 @@ Config (from user_workflows.config):
 import json
 import os
 import subprocess
+import sys
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,7 +124,7 @@ async def run_data_analyzer(
         step1 = await engine.start_step(session, run.run_id, 1, "Analyze data")
 
         script = os.path.join(SCRIPTS_DIR, "analyze_data.py")
-        cmd = ["python3", script, abs_path, "--output-dir", output_dir]
+        cmd = [sys.executable, script, abs_path, "--output-dir", output_dir]
 
         if config.get("start_date"):
             cmd.extend(["--start", config["start_date"]])

@@ -16,6 +16,7 @@ Config (from user_workflows.config):
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
@@ -372,7 +373,7 @@ async def run_email_monitor(
             )
             result = subprocess.run(
                 [
-                    "python3", excel_script, json_path,
+                    sys.executable, excel_script, json_path,
                     "--output-dir", output_dir,
                     "--meta-json", json.dumps(xlsx_meta, default=str),
                 ],
