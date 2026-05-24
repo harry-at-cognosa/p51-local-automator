@@ -10,6 +10,7 @@ node_modules/
 frontend/dist/
 backend/static/
 data/
+logs/
 .pytest_cache/
 .mypy_cache/
 *.xlsx
