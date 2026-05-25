@@ -18,6 +18,7 @@ from backend.db.models import (
     WorkflowTypes,
     UserWorkflows,
     WorkflowRuns,
+    WorkflowRunEmailLog,
     WorkflowSteps,
     WorkflowArtifacts,
 )
@@ -718,11 +719,39 @@ async def list_runs(
         .subquery()
     )
 
+    # Latest email-send log row per run. We pick the highest id per run_id
+    # so the most recent attempt wins on the rare path where a run produced
+    # multiple rows (e.g. retries — not implemented today but harmless).
+    email_log_latest = (
+        select(
+            WorkflowRunEmailLog.run_id,
+            func.max(WorkflowRunEmailLog.id).label("max_id"),
+        )
+        .group_by(WorkflowRunEmailLog.run_id)
+        .subquery()
+    )
+
     stmt = (
-        select(WorkflowRuns, artifact_counts.c.artifact_count)
+        select(
+            WorkflowRuns,
+            artifact_counts.c.artifact_count,
+            WorkflowRunEmailLog.status,
+            WorkflowRunEmailLog.recipient,
+            WorkflowRunEmailLog.error_message,
+        )
         .join(
             artifact_counts,
             WorkflowRuns.run_id == artifact_counts.c.run_id,
+            isouter=True,
+        )
+        .join(
+            email_log_latest,
+            WorkflowRuns.run_id == email_log_latest.c.run_id,
+            isouter=True,
+        )
+        .join(
+            WorkflowRunEmailLog,
+            WorkflowRunEmailLog.id == email_log_latest.c.max_id,
             isouter=True,
         )
         .where(WorkflowRuns.workflow_id == workflow_id)
@@ -734,7 +763,7 @@ async def list_runs(
     result = await session.execute(stmt)
 
     rows = []
-    for run, count in result.all():
+    for run, count, email_status, email_recipient, email_error in result.all():
         rows.append(
             WorkflowRunRead(
                 run_id=run.run_id,
@@ -750,6 +779,9 @@ async def list_runs(
                 artifact_count=int(count or 0),
                 config_snapshot=run.config_snapshot,
                 archived=run.archived,
+                email_send_status=email_status,
+                email_send_recipient=email_recipient,
+                email_send_error=email_error,
             )
         )
     return rows
@@ -892,6 +924,14 @@ async def get_run(
 
     workflow_type = await session.get(WorkflowTypes, workflow.type_id)
 
+    # Latest email-send log row for this run, if any.
+    email_log = await session.scalar(
+        select(WorkflowRunEmailLog)
+        .where(WorkflowRunEmailLog.run_id == run_id)
+        .order_by(WorkflowRunEmailLog.id.desc())
+        .limit(1)
+    )
+
     return WorkflowRunRead(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
@@ -908,6 +948,9 @@ async def get_run(
         archived=run.archived,
         type_id=workflow.type_id,
         config_schema=workflow_type.config_schema if workflow_type else None,
+        email_send_status=email_log.status if email_log else None,
+        email_send_recipient=email_log.recipient if email_log else None,
+        email_send_error=email_log.error_message if email_log else None,
     )
 
 

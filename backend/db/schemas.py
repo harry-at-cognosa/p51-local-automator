@@ -447,6 +447,11 @@ class WorkflowRunRead(BaseModel):
     archived: bool = False
     type_id: int | None = None         # populated by detail endpoint only
     config_schema: list | None = None  # populated by detail endpoint only
+    # Latest "email me results" delivery attempt for this run, if any.
+    # status ∈ {sent, failed, skipped_no_outbound, skipped_no_artifacts, skipped_disabled}
+    email_send_status: str | None = None
+    email_send_recipient: str | None = None
+    email_send_error: str | None = None
 
     class Config:
         from_attributes = True

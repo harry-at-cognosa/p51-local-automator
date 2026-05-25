@@ -7,6 +7,7 @@ import {
 import axiosClient from "../api/axiosClient";
 import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
+import EmailSendBadge from "../components/EmailSendBadge";
 import EditScheduleModal from "../components/EditScheduleModal";
 import { useAuthStore } from "../stores/useAuthStore";
 
@@ -54,6 +55,9 @@ interface WorkflowRun {
   error_detail: string | null;
   artifact_count: number;
   archived: boolean;
+  email_send_status: string | null;
+  email_send_recipient: string | null;
+  email_send_error: string | null;
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -390,7 +394,14 @@ export default function WorkflowDetail() {
                           </Badge>
                         )}
                       </td>
-                      <td><StatusBadge status={r.status} /></td>
+                      <td>
+                        <StatusBadge status={r.status} />
+                        <EmailSendBadge
+                          status={r.email_send_status}
+                          recipient={r.email_send_recipient}
+                          error={r.email_send_error}
+                        />
+                      </td>
                       <td>{r.current_step}/{r.total_steps}</td>
                       <td><Badge bg="light" text="dark">{r.trigger}</Badge></td>
                       <td>{new Date(r.started_at).toLocaleString()}</td>

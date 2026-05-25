@@ -14,6 +14,7 @@ import { Badge, Button, Card, Container, Spinner, Table } from "react-bootstrap"
 import { useNavigate } from "react-router-dom";
 import axiosClient from "../api/axiosClient";
 import StatusBadge from "../components/StatusBadge";
+import EmailSendBadge from "../components/EmailSendBadge";
 
 interface AdHocRunListItem {
   run_id: number;
@@ -28,6 +29,9 @@ interface AdHocRunListItem {
   started_at: string;
   completed_at: string | null;
   artifact_count: number;
+  email_send_status: string | null;
+  email_send_recipient: string | null;
+  email_send_error: string | null;
 }
 
 export default function AdHocRuns() {
@@ -110,6 +114,11 @@ export default function AdHocRuns() {
                       <td>{r.workflow_name}</td>
                       <td>
                         <StatusBadge status={r.status} />
+                        <EmailSendBadge
+                          status={r.email_send_status}
+                          recipient={r.email_send_recipient}
+                          error={r.email_send_error}
+                        />
                       </td>
                       <td>
                         {r.current_step}/{r.total_steps}

@@ -43,6 +43,7 @@ from backend.db.models import (
     UserWorkflows,
     WorkflowArtifacts,
     WorkflowRuns,
+    WorkflowRunEmailLog,
     WorkflowTypes,
 )
 from backend.db.session import async_get_session
@@ -512,6 +513,9 @@ class AdHocRunListItem(BaseModel):
     started_at: datetime
     completed_at: Optional[datetime] = None
     artifact_count: int = 0
+    email_send_status: Optional[str] = None
+    email_send_recipient: Optional[str] = None
+    email_send_error: Optional[str] = None
 
 
 # Mirrors the cap on the existing per-workflow runs list endpoint.
@@ -543,16 +547,30 @@ async def list_adhoc_runs(
         .subquery()
     )
 
+    email_log_latest = (
+        select(
+            WorkflowRunEmailLog.run_id,
+            func.max(WorkflowRunEmailLog.id).label("max_id"),
+        )
+        .group_by(WorkflowRunEmailLog.run_id)
+        .subquery()
+    )
+
     q = (
         select(
             WorkflowRuns,
             UserWorkflows,
             WorkflowTypes,
             artifact_counts.c.artifact_count,
+            WorkflowRunEmailLog.status,
+            WorkflowRunEmailLog.recipient,
+            WorkflowRunEmailLog.error_message,
         )
         .join(UserWorkflows, UserWorkflows.workflow_id == WorkflowRuns.workflow_id)
         .join(WorkflowTypes, WorkflowTypes.type_id == UserWorkflows.type_id)
         .outerjoin(artifact_counts, artifact_counts.c.run_id == WorkflowRuns.run_id)
+        .outerjoin(email_log_latest, email_log_latest.c.run_id == WorkflowRuns.run_id)
+        .outerjoin(WorkflowRunEmailLog, WorkflowRunEmailLog.id == email_log_latest.c.max_id)
         .where(
             UserWorkflows.is_adhoc.is_(True),
             UserWorkflows.deleted == 0,
@@ -564,7 +582,7 @@ async def list_adhoc_runs(
     )
     result = await session.execute(q)
     rows: list[AdHocRunListItem] = []
-    for run, workflow, wf_type, artifact_count in result.all():
+    for run, workflow, wf_type, artifact_count, em_status, em_recipient, em_error in result.all():
         rows.append(AdHocRunListItem(
             run_id=run.run_id,
             workflow_id=workflow.workflow_id,
@@ -578,5 +596,8 @@ async def list_adhoc_runs(
             started_at=run.started_at,
             completed_at=run.completed_at,
             artifact_count=int(artifact_count or 0),
+            email_send_status=em_status,
+            email_send_recipient=em_recipient,
+            email_send_error=em_error,
         ))
     return rows
