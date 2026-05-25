@@ -175,6 +175,9 @@ export default function TopNavBar() {
                 Group: {auth.group_name}
               </NavDropdown.ItemText>
               <NavDropdown.Divider />
+              <LinkContainer to="/app/profile">
+                <NavDropdown.Item>Profile</NavDropdown.Item>
+              </LinkContainer>
               <LinkContainer to="/app/logout">
                 <NavDropdown.Item>Logout</NavDropdown.Item>
               </LinkContainer>

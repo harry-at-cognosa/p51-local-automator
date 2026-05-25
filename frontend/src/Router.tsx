@@ -18,6 +18,7 @@ import Maintenance from "./pages/Maintenance";
 import Schedules from "./pages/Schedules";
 import AdHocEmailMonitor from "./pages/AdHocEmailMonitor";
 import AdHocRuns from "./pages/AdHocRuns";
+import Profile from "./pages/Profile";
 
 export const Router = createBrowserRouter([
   {
@@ -59,6 +60,10 @@ export const Router = createBrowserRouter([
       {
         path: "ad-hoc/runs",
         element: <AdHocRuns />,
+      },
+      {
+        path: "profile",
+        element: <Profile />,
       },
       {
         path: "admin/users",
