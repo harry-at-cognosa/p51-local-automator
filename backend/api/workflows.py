@@ -819,6 +819,18 @@ async def _run_workflow_background(workflow_id: int):
 
         await runner(session, workflow, trigger="manual")
 
+        # Optional "email me my results" final step. Best-effort: never
+        # fails the run, always writes to workflow_run_email_log.
+        run = await session.scalar(
+            select(WorkflowRuns)
+            .where(WorkflowRuns.workflow_id == workflow_id)
+            .order_by(WorkflowRuns.run_id.desc())
+            .limit(1)
+        )
+        if run is not None and run.status == "completed":
+            from backend.services import results_email
+            await results_email.send_results_email(session, workflow, run)
+
 
 @router_workflows.post("/workflows/{workflow_id}/run", response_model=dict)
 async def trigger_run(

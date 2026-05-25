@@ -172,6 +172,75 @@ def get_app_password(workflow: UserWorkflows, email_addr: str) -> Optional[str]:
     return None
 
 
+async def get_app_password_for_email(session, group_id: int, email_addr: str) -> Optional[str]:
+    """Look up the App Password for `email_addr` without a workflow context.
+
+    Used by the "email me results" feature when the user's designated
+    outbound is a gmail_imap account. Walk order:
+
+      1. .gmailpasswords.json (machine-wide; takes precedence — this is
+         where /users/me PATCH writes when the user sets an outbound
+         App Password from the profile page).
+      2. Any user_workflows row in the user's group with service=gmail_imap,
+         a matching top-level email, and a populated app_password_enc.
+         Decrypts and returns.
+
+    Returns None if neither source has a credential.
+    """
+    # 1. file backend
+    data = _load_file_locked()
+    pw = data.get(email_addr)
+    if pw:
+        return _strip(pw)
+
+    # 2. encrypted blobs stored on any of the group's workflows
+    from sqlalchemy import select
+    result = await session.execute(
+        select(UserWorkflows).where(
+            UserWorkflows.group_id == group_id,
+            UserWorkflows.deleted == 0,
+        )
+    )
+    for wf in result.scalars().all():
+        config = wf.config or {}
+        # top-level single-account shape
+        if (
+            config.get("service") == "gmail_imap"
+            and config.get("email") == email_addr
+            and config.get("app_password_enc")
+        ):
+            try:
+                return _strip(secrets.decrypt_from_b64(config["app_password_enc"]))
+            except RuntimeError as exc:
+                log.warning(
+                    "gmail_imap_password_decrypt_failed",
+                    email=email_addr,
+                    workflow_id=wf.workflow_id,
+                    error=str(exc),
+                )
+                continue
+        # ad-hoc accounts[] shape
+        for acct in config.get("accounts", []) or []:
+            if not isinstance(acct, dict):
+                continue
+            if (
+                acct.get("email") == email_addr
+                and acct.get("service") == "gmail_imap"
+                and acct.get("app_password_enc")
+            ):
+                try:
+                    return _strip(secrets.decrypt_from_b64(acct["app_password_enc"]))
+                except RuntimeError as exc:
+                    log.warning(
+                        "gmail_imap_password_decrypt_failed",
+                        email=email_addr,
+                        workflow_id=wf.workflow_id,
+                        error=str(exc),
+                    )
+                    continue
+    return None
+
+
 def save_app_password(
     workflow: UserWorkflows,
     email_addr: str,

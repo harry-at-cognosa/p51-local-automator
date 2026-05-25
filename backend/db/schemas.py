@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from fastapi_users import schemas
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ── User schemas (fastapi-users) ─────────────────────────────
@@ -167,9 +167,29 @@ class WorkflowTypeRead(BaseModel):
     enabled: bool
     schedulable: bool
     emailable_results: bool = False
+    # {kind_key: human_label} for the artifact checkboxes the workflow form
+    # renders when emailable_results=True. Computed at serialize time from
+    # the per-type registry in services/results_email.py; empty for types
+    # that don't opt in. Read-only — not stored in the DB.
+    email_artifact_kinds: dict[str, str] = {}
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def _populate_email_artifact_kinds(self):
+        # If a caller supplied an explicit non-empty dict (rare; mostly
+        # direct construction from a test), trust it. Otherwise derive
+        # from the type_id via the per-type registry.
+        if self.email_artifact_kinds:
+            return self
+        # Lazy import to avoid a schemas→services dependency at module load.
+        try:
+            from backend.services.results_email import kinds_for_type
+        except Exception:
+            return self
+        self.email_artifact_kinds = kinds_for_type(self.type_id)
+        return self
 
 
 class WorkflowCategoryUpdate(BaseModel):
