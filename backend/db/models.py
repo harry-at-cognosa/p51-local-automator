@@ -49,6 +49,17 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     is_groupadmin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'FALSE'"))
     # Roles: is_superuser (from fastapi-users), is_groupadmin, is_manager
     is_manager: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'FALSE'"))
+    # User's designated outbound email account for "email results" final-step.
+    # outbound_service is one of {apple_mail, gmail, gmail_imap} or NULL.
+    # outbound_identifier shape depends on service:
+    #   gmail       → stringified gmail_accounts.id
+    #   gmail_imap  → the email address
+    #   apple_mail  → JSON blob {"account_name": "...", "destination": "..."}
+    #                 (account_name blank = Mail.app default; destination is
+    #                 a plain email address since Apple Mail accounts are
+    #                 identified by name in Mail.app, not by address).
+    outbound_service: Mapped[str | None] = mapped_column(VARCHAR(16), nullable=True)
+    outbound_identifier: Mapped[str | None] = mapped_column(VARCHAR(512), nullable=True)
 
     group: Mapped["ApiGroups"] = relationship("ApiGroups", back_populates="api_users_list")
     workflows: Mapped[list["UserWorkflows"]] = relationship("UserWorkflows", back_populates="user")
@@ -131,6 +142,11 @@ class WorkflowTypes(Base):
     # Collection) is false: a single run is too expensive/slow to dispatch
     # from cron. Frontend hides schedule UI when this is false.
     schedulable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'TRUE'"))
+    # Whether instances of this type can email their results to the workflow
+    # owner's designated outbound account. Default FALSE; seeded TRUE for
+    # type 1 (Email Topic Monitor) and 3 (Calendar Digest). Frontend hides
+    # the "Email results" config section when false.
+    emailable_results: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("'FALSE'"))
 
     category: Mapped["WorkflowCategories"] = relationship("WorkflowCategories", back_populates="workflow_types")
     user_workflows: Mapped[list["UserWorkflows"]] = relationship("UserWorkflows", back_populates="workflow_type")
@@ -251,6 +267,35 @@ class WorkflowArtifacts(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     run: Mapped["WorkflowRuns"] = relationship("WorkflowRuns", back_populates="artifacts")
+
+
+class WorkflowRunEmailLog(Base):
+    """One row per email-send attempt at the end of a workflow run.
+
+    The run's `status` is NOT changed by email outcome — a run succeeds
+    whether or not the optional "email me results" delivery succeeded.
+    This table is the source of truth for delivery; the UI reads it to
+    decorate run rows with a sent/failed/skipped badge.
+    """
+    __tablename__ = "workflow_run_email_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("workflow_runs.run_id", name="fk_workflow_run_email_log_run_id"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # service ∈ {apple_mail, gmail, gmail_imap}
+    service: Mapped[str] = mapped_column(VARCHAR(16), nullable=False)
+    recipient: Mapped[str] = mapped_column(VARCHAR(320), nullable=False)
+    subject: Mapped[str] = mapped_column(VARCHAR(512), nullable=False)
+    # status ∈ {sent, failed, skipped_no_outbound, skipped_disabled, skipped_no_artifacts}
+    status: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attachment_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 # ── Conversations (from CompIntelMon) ──────────────────────────

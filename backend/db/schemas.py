@@ -57,6 +57,34 @@ class UsersMe(BaseModel):
     is_verified: bool
     is_groupadmin: bool
     is_manager: bool
+    # Designated outbound account for the "email me results" feature.
+    outbound_service: str | None = None
+    outbound_identifier: str | None = None
+
+
+class UsersMePatch(BaseModel):
+    """Editable fields on /users/me. Currently only the outbound prefs.
+
+    Setting outbound_service to None clears the designation entirely (the
+    PATCH route also nulls outbound_identifier in that case).
+    """
+    outbound_service: str | None = None
+    outbound_identifier: str | None = None
+    # Optional convenience: when service=gmail_imap, the client may send
+    # the App Password here so the server stores it in the machine-wide
+    # .gmailpasswords.json. NEVER returned by GET /users/me. Use the
+    # masked-secret pattern on the frontend (blank = leave as-is).
+    outbound_app_password: str | None = None
+
+    @field_validator("outbound_service")
+    @classmethod
+    def _validate_service(cls, v):
+        if v is None or v == "":
+            return None
+        allowed = {"apple_mail", "gmail", "gmail_imap"}
+        if v not in allowed:
+            raise ValueError(f"outbound_service must be one of {sorted(allowed)} or null")
+        return v
 
 
 # ── User management schemas ──────────────────────────────────
@@ -138,6 +166,7 @@ class WorkflowTypeRead(BaseModel):
     config_schema: list | None = None
     enabled: bool
     schedulable: bool
+    emailable_results: bool = False
 
     class Config:
         from_attributes = True
@@ -433,6 +462,23 @@ class WorkflowArtifactRead(BaseModel):
     description: str
     created_at: datetime
     file_exists: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRunEmailLogRead(BaseModel):
+    """Public view of a per-run email delivery attempt."""
+    id: int
+    run_id: int
+    user_id: int
+    service: str
+    recipient: str
+    subject: str
+    status: str
+    error_message: str | None = None
+    attachment_count: int
+    created_at: datetime
 
     class Config:
         from_attributes = True
