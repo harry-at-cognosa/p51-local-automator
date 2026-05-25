@@ -98,6 +98,25 @@ Every artifact a workflow run produces carries an embedded metadata block identi
 
 No backfill — artifacts produced before this commit have no meta block.
 
+## Email me my results (per-workflow opt-in final step)
+
+Workflows can optionally email selected artifacts to the owner's designated outbound account after a run completes. The hook lives in `_run_workflow_background` in `backend/api/workflows.py` after the per-type runner returns — this catches manual triggers, scheduled APScheduler fires, and ad-hoc runs through one entry point.
+
+**Per-type opt-in:** `workflow_types.emailable_results` (boolean, default FALSE). Seeded TRUE for type 1 (Email Topic Monitor) and type 3 (Calendar Digest) by migration `b6d4e2c9f8a7`. Frontend hides the "Email results" section in the workflow config form when false.
+
+**Per-workflow opt-in:** the workflow config carries `email_results = { enabled: bool, artifact_kinds: [str] }`. `artifact_kinds` are stable keys defined per type in `backend/services/results_email.py` `ARTIFACT_KINDS_BY_TYPE` (regex patterns matched against artifact basenames at send time).
+
+**Per-user designation:** the user picks one outbound account in their Profile page (`/app/profile`). Stored as two columns on `api_users`: `outbound_service` (`apple_mail` / `gmail` / `gmail_imap` / NULL) and `outbound_identifier` (gmail_accounts.id for gmail OAuth; email address for gmail_imap; JSON `{account_name, destination}` for apple_mail). One designated account plays BOTH sender and destination roles — for gmail and gmail_imap it sends to itself; for apple_mail the destination is an explicit email field because Mail.app accounts are identified by name.
+
+**Sender backends** (single source of truth: `backend/services/results_email.py` `_dispatch`):
+- `apple_mail` → `mcp_client.mail_send_email_with_attachments` (osascript). Mail.app must be running in a GUI session — same constraint as Apple Mail monitoring. Send is fire-and-forget; Mail.app's outbox handles SMTP retries.
+- `gmail` → `gmail_client.gmail_send_message` with attachments. `gmail.send` scope is already in the SCOPES list (no re-consent needed for existing connected accounts).
+- `gmail_imap` → `gmail_smtp_client.smtp_send` via `smtp.gmail.com:465` SSL + App Password. App Password is looked up via `gmail_password_store.get_app_password_for_email` (machine-wide `.gmailpasswords.json` first, then any of the group's workflows with a matching encrypted blob).
+
+**Delivery log:** every attempt — including skips — writes one row to `workflow_run_email_log` (run_id, user_id, service, recipient, subject, status ∈ `sent`/`failed`/`skipped_no_outbound`/`skipped_no_artifacts`/`skipped_disabled`, error_message, attachment_count). The run's `status` is NOT changed by email outcome; a run succeeds whether or not delivery succeeded. The UI reads the latest log row per run to decorate with an envelope badge (`EmailSendBadge` component) in the run list views.
+
+**Adding email support to a new type:** (a) flip the type's `emailable_results` to TRUE via migration; (b) add an `ARTIFACT_KINDS_BY_TYPE[type_id]` entry mapping kind keys to filename regexes; (c) add labels to `ARTIFACT_KIND_LABELS`. The runner itself needs no change — `send_results_email` finds attachments by scanning `run.artifacts` against the regexes.
+
 ## Versioning
 
 - **Scheme:** CalVer `YYYY.MM.DD.N` (e.g. `2026.05.18.0`, `2026.05.18.1`, `2026.05.19.0`). The trailing `N` is a per-day serial that resets to 0 each new day. Date is zero-padded so the format also string-sorts correctly.
