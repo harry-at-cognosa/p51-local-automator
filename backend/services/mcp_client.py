@@ -219,6 +219,86 @@ end tell
     return output
 
 
+async def mail_send_email_with_attachments(
+    to: str,
+    subject: str,
+    body: str,
+    from_account: str | None = None,
+    attachments: list[str] | None = None,
+) -> dict:
+    """Send a Mail.app message with optional file attachments via AppleScript.
+
+    The MCP server's `send_email` tool doesn't expose an `attachments` arg
+    (verified empirically), so we use osascript directly — same approach as
+    `mail_save_draft` but ending with `send` instead of `save`. Each
+    attachment is added via `make new attachment with properties {file name:
+    POSIX file "<path>"}` inside `tell content of newMessage`.
+
+    Attachment paths must be absolute. Mail.app must be running (AppleScript
+    will launch it). Send is fire-and-forget from our perspective: Mail.app
+    queues the message in its outbox and handles SMTP retries internally.
+    Success here means "the message was handed to Mail.app", not "the SMTP
+    server accepted it" — see Mail.app's outbox UI to confirm actual delivery.
+    """
+    sender_line = ""
+    if from_account:
+        sender_line = f'\n    set sender of newMessage to "{_applescript_escape(from_account)}"'
+
+    attachment_lines = ""
+    valid_attachments: list[str] = []
+    for path in attachments or []:
+        if not path or not isinstance(path, str):
+            continue
+        # Reject relative paths defensively — AppleScript will silently
+        # interpret them in Mail.app's working directory if we let them
+        # through, which is rarely what callers want.
+        import os
+        if not os.path.isabs(path):
+            log.warning("apple_mail_attachment_skipped_relative_path", path=path)
+            continue
+        if not os.path.isfile(path):
+            log.warning("apple_mail_attachment_missing", path=path)
+            continue
+        valid_attachments.append(path)
+        escaped = _applescript_escape(path)
+        attachment_lines += (
+            f'\n    tell content of newMessage to '
+            f'make new attachment with properties '
+            f'{{file name:POSIX file "{escaped}"}} '
+            f'at after the last paragraph'
+        )
+
+    script = f'''
+tell application "Mail"
+    set newMessage to make new outgoing message with properties {{subject:"{_applescript_escape(subject)}", content:"{_applescript_escape(body)}", visible:false}}
+    tell newMessage
+        make new to recipient at end of to recipients with properties {{address:"{_applescript_escape(to)}"}}
+    end tell{sender_line}{attachment_lines}
+    send newMessage
+    return "sent"
+end tell
+'''.strip()
+
+    def _run():
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=60,  # attachments can take a moment to add
+        )
+
+    result = await asyncio.to_thread(_run)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"mail_send_email_with_attachments failed: {result.stderr.strip()[:500]}"
+        )
+    return {
+        "ok": True,
+        "output": result.stdout.strip(),
+        "attachment_count": len(valid_attachments),
+    }
+
+
 async def mail_save_draft(to: str, subject: str, body: str, from_account: str | None = None) -> dict:
     """Create an outgoing message in Mail.app and save it to that account's Drafts.
 

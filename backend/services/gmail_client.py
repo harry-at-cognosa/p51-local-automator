@@ -370,14 +370,29 @@ async def gmail_get_message(
     return out
 
 
-def _build_mime_message(*, to: str, subject: str, body: str, in_reply_to: str | None = None) -> str:
-    """Construct a single-part text/plain RFC 822 message and return its
-    base64url-encoded raw form, ready for Gmail's drafts.create / messages.send.
+def _build_mime_message(
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    in_reply_to: str | None = None,
+    attachments: list[str] | None = None,
+) -> str:
+    """Construct an RFC 822 message and return its base64url-encoded raw form,
+    ready for Gmail's drafts.create / messages.send.
 
     `in_reply_to` is the source message's RFC 822 Message-ID header value
     (with brackets, e.g. `<abc@mail.gmail.com>`); when supplied it's also
-    written to References so Gmail threads the reply with the original."""
+    written to References so Gmail threads the reply with the original.
+
+    `attachments` is a list of absolute filesystem paths. When non-empty the
+    resulting message is multipart; EmailMessage.add_attachment() handles
+    the MIME composition. MIME type is guessed from the filename via the
+    stdlib `mimetypes` module, falling back to application/octet-stream.
+    """
+    import mimetypes
     from email.message import EmailMessage
+    from pathlib import Path
 
     msg = EmailMessage()
     msg["To"] = to
@@ -386,6 +401,18 @@ def _build_mime_message(*, to: str, subject: str, body: str, in_reply_to: str | 
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = in_reply_to
     msg.set_content(body)
+
+    for path_str in attachments or []:
+        p = Path(path_str)
+        if not p.is_file():
+            log.warning("gmail_attachment_missing", path=str(p))
+            continue
+        guessed, _ = mimetypes.guess_type(p.name)
+        maintype, subtype = (guessed or "application/octet-stream").split("/", 1)
+        with p.open("rb") as f:
+            data = f.read()
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=p.name)
+
     raw_bytes = msg.as_bytes()
     return base64.urlsafe_b64encode(raw_bytes).decode("ascii")
 
@@ -441,16 +468,24 @@ async def gmail_send_message(
     subject: str,
     body: str,
     in_reply_to: str | None = None,
+    attachments: list[str] | None = None,
     workflow_id: int | None = None,
     run_id: int | None = None,
 ) -> dict[str, str]:
     """Send a Gmail message via users.messages.send. Returns
     {'message_id', 'thread_id'}.
 
-    Requires the gmail.send scope (added in B2.1)."""
+    Requires the gmail.send scope (added in B2.1). `attachments` is an
+    optional list of absolute paths to files to attach."""
     account = await _load_active_account(session, account_id)
     creds = await _ensure_fresh_credentials(session, account)
-    raw = _build_mime_message(to=to, subject=subject, body=body, in_reply_to=in_reply_to)
+    raw = _build_mime_message(
+        to=to,
+        subject=subject,
+        body=body,
+        in_reply_to=in_reply_to,
+        attachments=attachments,
+    )
 
     def _send():
         service = _build_service(creds)
