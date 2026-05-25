@@ -24,6 +24,8 @@ interface WorkflowTypeNested {
   category: WorkflowCategoryNested;
   config_schema?: unknown[] | null;
   schedulable?: boolean;
+  emailable_results?: boolean;
+  email_artifact_kinds?: Record<string, string>;
 }
 
 interface UserWorkflow {
@@ -440,6 +442,10 @@ export default function WorkflowDetail() {
               (workflow.type?.config_schema as
                 | import("../components/SchemaConfigForm").FieldDescriptor[]
                 | undefined) ?? null
+            }
+            emailableResults={Boolean(workflow.type?.emailable_results)}
+            emailArtifactKinds={
+              (workflow.type?.email_artifact_kinds as Record<string, string> | undefined) ?? {}
             }
           />
         </Modal.Body>

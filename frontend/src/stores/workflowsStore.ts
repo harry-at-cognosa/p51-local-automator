@@ -21,6 +21,9 @@ export interface WorkflowType {
   default_config: Record<string, unknown>;
   config_schema?: unknown[] | null;
   enabled: boolean;
+  schedulable?: boolean;
+  emailable_results?: boolean;
+  email_artifact_kinds?: Record<string, string>;
 }
 
 export interface UserWorkflowListRow {

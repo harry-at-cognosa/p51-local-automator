@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Accordion, Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
+import { Link } from "react-router-dom";
 import SchemaConfigForm, { type FieldDescriptor } from "./SchemaConfigForm";
 import FilePicker, { type FilePickerSelection } from "./FilePicker";
 import axiosClient from "../api/axiosClient";
@@ -107,6 +108,16 @@ interface Props {
    * Types 1–6 keep their hand-tuned UX even when a schema is also present.
    */
   configSchema?: FieldDescriptor[] | null;
+  /**
+   * Per-type opt-in flag for the "email me results" final step. When TRUE,
+   * the EmailResultsSection is rendered below the per-type form.
+   */
+  emailableResults?: boolean;
+  /**
+   * {kind_key: human_label} the workflow type produces. Drives the checkboxes
+   * in the EmailResultsSection. Empty when the type doesn't opt in.
+   */
+  emailArtifactKinds?: Record<string, string>;
 }
 
 const PERIOD_OPTIONS = [
@@ -127,33 +138,71 @@ const CALENDAR_OPTIONS = [
   "Work", "Family", "Home", "Calendar",
 ];
 
-export default function WorkflowConfigForm({ typeId, config, onChange, configSchema }: Props) {
+export default function WorkflowConfigForm({
+  typeId,
+  config,
+  onChange,
+  configSchema,
+  emailableResults,
+  emailArtifactKinds,
+}: Props) {
   const set = (key: string, value: unknown) => {
     onChange({ ...config, [key]: value });
   };
 
+  const emailSection = emailableResults ? (
+    <EmailResultsSection
+      config={config}
+      set={set}
+      kinds={emailArtifactKinds || {}}
+    />
+  ) : null;
+
   // Email Topic Monitor — extracted to its own component so the
   // service-switch + gmail-accounts fetch can use hooks.
   if (typeId === 1) {
-    return <Type1EmailMonitorForm config={config} onChange={onChange} set={set} />;
+    return (
+      <>
+        <Type1EmailMonitorForm config={config} onChange={onChange} set={set} />
+        {emailSection}
+      </>
+    );
   }
 
   // Transaction Data Analyzer — extracted to a subcomponent so the
   // FilePicker modal can own its show/hide state via hooks.
   if (typeId === 2) {
-    return <Type2DataAnalyzerForm config={config} onChange={onChange} set={set} />;
+    return (
+      <>
+        <Type2DataAnalyzerForm config={config} onChange={onChange} set={set} />
+        {emailSection}
+      </>
+    );
   }
 
   // Calendar Digest — apple_calendar (existing) or google_calendar (Track GC).
   // Subcomponent owns hooks for the lazy-fetch of the Google calendar list.
   if (typeId === 3) {
-    return <Type3CalendarDigestForm config={config} onChange={onChange} set={set} />;
+    return (
+      <>
+        <Type3CalendarDigestForm config={config} onChange={onChange} set={set} />
+        {emailSection}
+      </>
+    );
   }
 
-  // SQL Query Runner
+  // SQL Query Runner — wraps the return so the email section can append
+  // below the existing inline JSX.
+  const wrapWithEmail = (node: React.ReactNode) => (
+    <>
+      {node}
+      {emailSection}
+    </>
+  );
+
   if (typeId === 4) {
     const hasStoredSecret = Boolean(config.connection_string_enc);
-    return (
+    return wrapWithEmail(
       <Row className="g-3">
         <Col md={6}>
           <Form.Group>
@@ -211,18 +260,18 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
   // Same config shape for both; subcomponent owns hooks for the gmail
   // account picker (Track B Phase B2).
   if (typeId === 5 || typeId === 6) {
-    return <Type56AutoReplyForm config={config} onChange={onChange} set={set} />;
+    return wrapWithEmail(<Type56AutoReplyForm config={config} onChange={onChange} set={set} />);
   }
 
   // Schema-driven path for new workflow types whose typeId has no
   // hand-tuned branch above. The backend's config_schema describes the
   // fields and the generic renderer handles them.
   if (configSchema && configSchema.length > 0) {
-    return <SchemaConfigForm schema={configSchema} config={config} onChange={onChange} />;
+    return wrapWithEmail(<SchemaConfigForm schema={configSchema} config={config} onChange={onChange} />);
   }
 
   // Final fallback: raw JSON when no schema is available either.
-  return (
+  return wrapWithEmail(
     <Form.Group>
       <Form.Label>Configuration (JSON)</Form.Label>
       <Form.Control
@@ -236,6 +285,119 @@ export default function WorkflowConfigForm({ typeId, config, onChange, configSch
       />
     </Form.Group>
   );
+}
+
+
+// ── EmailResultsSection — opt-in "email me my results" final-step config ──
+
+interface EmailResultsSectionProps {
+  config: Record<string, unknown>;
+  set: (key: string, value: unknown) => void;
+  kinds: Record<string, string>;
+}
+
+interface MeOutboundInfo {
+  outbound_service: string | null;
+  outbound_identifier: string | null;
+}
+
+function EmailResultsSection({ config, set, kinds }: EmailResultsSectionProps) {
+  const [me, setMe] = useState<MeOutboundInfo | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    axiosClient
+      .get<MeOutboundInfo>("/users/me")
+      .then((res) => { if (!cancelled) setMe(res.data); })
+      .catch(() => { if (!cancelled) setMe({ outbound_service: null, outbound_identifier: null }); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const emailCfg = (config.email_results as { enabled?: boolean; artifact_kinds?: string[] } | undefined) || {};
+  const enabled = Boolean(emailCfg.enabled);
+  const selectedKinds = emailCfg.artifact_kinds || [];
+
+  const setEmailCfg = (next: { enabled?: boolean; artifact_kinds?: string[] }) => {
+    set("email_results", { ...emailCfg, ...next });
+  };
+
+  const toggleKind = (kind: string, checked: boolean) => {
+    const cur = new Set(selectedKinds);
+    if (checked) cur.add(kind);
+    else cur.delete(kind);
+    setEmailCfg({ artifact_kinds: Array.from(cur) });
+  };
+
+  const hasOutbound = Boolean(me?.outbound_service);
+  const outboundLabel = describeOutbound(me);
+
+  return (
+    <Row className="g-3 mt-3 pt-3 border-top">
+      <Col md={12}>
+        <h6>Email results</h6>
+        <Form.Check
+          type="checkbox"
+          id="email-results-enabled"
+          label="Email me selected results when this workflow finishes"
+          checked={enabled}
+          disabled={!hasOutbound}
+          onChange={(e) => setEmailCfg({ enabled: e.target.checked })}
+        />
+        {!hasOutbound && (
+          <Form.Text className="text-muted d-block ms-4">
+            Set your outbound results email in{" "}
+            <Link to="/app/profile">Profile</Link> first to enable this option.
+          </Form.Text>
+        )}
+        {hasOutbound && enabled && (
+          <>
+            <Form.Text className="text-muted d-block ms-4 mb-2">
+              Will be sent via: {outboundLabel} — change in{" "}
+              <Link to="/app/profile">Profile</Link>.
+            </Form.Text>
+            {Object.keys(kinds).length === 0 ? (
+              <Form.Text className="text-muted d-block ms-4">
+                (No selectable artifact kinds defined for this workflow type — nothing to attach.)
+              </Form.Text>
+            ) : (
+              <div className="ms-4">
+                <div className="text-muted small mb-1">Attach:</div>
+                {Object.entries(kinds).map(([key, label]) => (
+                  <Form.Check
+                    type="checkbox"
+                    key={key}
+                    id={`email-results-kind-${key}`}
+                    label={label}
+                    checked={selectedKinds.includes(key)}
+                    onChange={(e) => toggleKind(key, e.target.checked)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Col>
+    </Row>
+  );
+}
+
+function describeOutbound(me: MeOutboundInfo | null): string {
+  if (!me || !me.outbound_service) return "(unset)";
+  const svc = me.outbound_service;
+  const ident = me.outbound_identifier || "";
+  if (svc === "apple_mail") {
+    try {
+      const blob = JSON.parse(ident) as { account_name?: string; destination?: string };
+      const dest = blob.destination || "(no destination)";
+      const sender = blob.account_name || "Mail.app default";
+      return `Apple Mail (${sender}) → ${dest}`;
+    } catch {
+      return "Apple Mail (invalid config)";
+    }
+  }
+  if (svc === "gmail") return `Gmail OAuth account #${ident}`;
+  if (svc === "gmail_imap") return `Gmail App Password (${ident})`;
+  return svc;
 }
 
 

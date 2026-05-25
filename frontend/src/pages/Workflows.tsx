@@ -476,6 +476,14 @@ export default function Workflows() {
                       | import("../components/SchemaConfigForm").FieldDescriptor[]
                       | undefined) ?? null
                   }
+                  emailableResults={
+                    Boolean(types.find((t) => t.type_id === selectedTypeId)?.emailable_results)
+                  }
+                  emailArtifactKinds={
+                    (types.find((t) => t.type_id === selectedTypeId)?.email_artifact_kinds as
+                      | Record<string, string>
+                      | undefined) ?? {}
+                  }
                 />
               </>
             )}
