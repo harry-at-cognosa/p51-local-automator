@@ -292,39 +292,48 @@ export default function Profile() {
           </Form.Group>
 
           {service === "apple_mail" && (
-            <Row className="mb-3">
-              <Col md={6}>
-                <Form.Group>
-                  <Form.Label>Mail.app sending account name</Form.Label>
-                  <Form.Control
-                    value={appleAccountName}
-                    placeholder="(leave blank to use Mail.app default)"
-                    onChange={(e) => setAppleAccountName(e.target.value)}
-                  />
-                  <Form.Text className="text-muted">
-                    The Mail.app account name — the "Description" field under Mail → Settings →
-                    Accounts (e.g. "iCloud", "Personal", or whatever you named it). If you renamed
-                    the account to match the email address, that's what to type here.
-                  </Form.Text>
-                </Form.Group>
-              </Col>
-              <Col md={6}>
-                <Form.Group>
-                  <Form.Label>Destination email address</Form.Label>
-                  <Form.Control
-                    type="email"
-                    value={appleDestination}
-                    placeholder="where to send results"
-                    onChange={(e) => setAppleDestination(e.target.value)}
-                  />
-                  <Form.Text className="text-muted">
-                    Required. Where workflow results should land (your inbox).
-                    Apple Mail accounts are identified by name, not by address —
-                    so we need this separately.
-                  </Form.Text>
-                </Form.Group>
-              </Col>
-            </Row>
+            <div className="mb-3">
+              <Row>
+                <Col md={6}>
+                  <Form.Group>
+                    <Form.Label>Send results to this email address</Form.Label>
+                    <Form.Control
+                      type="email"
+                      value={appleDestination}
+                      placeholder="you@example.com"
+                      onChange={(e) => setAppleDestination(e.target.value)}
+                    />
+                    <Form.Text className="text-muted">
+                      Required. Where your workflow result emails will land.
+                    </Form.Text>
+                  </Form.Group>
+                </Col>
+              </Row>
+              <details className="mt-3" open={Boolean(appleAccountName)}>
+                <summary className="text-muted" style={{ cursor: "pointer" }}>
+                  Advanced: send from a specific Mail.app account
+                </summary>
+                <Row className="mt-2">
+                  <Col md={6}>
+                    <Form.Group>
+                      <Form.Label>Mail.app sending account name</Form.Label>
+                      <Form.Control
+                        value={appleAccountName}
+                        placeholder="(leave blank to use Mail.app default)"
+                        onChange={(e) => setAppleAccountName(e.target.value)}
+                      />
+                      <Form.Text className="text-muted">
+                        Optional. By default Mail.app picks the account configured under
+                        Mail → Settings → Composing → "Send new messages from:". Override here
+                        only if you want results to come FROM a specific account — useful for
+                        the "shared sender" pattern (e.g. a KPI bot account). Match the account's
+                        Description field exactly as it appears under Mail → Settings → Accounts.
+                      </Form.Text>
+                    </Form.Group>
+                  </Col>
+                </Row>
+              </details>
+            </div>
           )}
 
           {service === "gmail" && (
