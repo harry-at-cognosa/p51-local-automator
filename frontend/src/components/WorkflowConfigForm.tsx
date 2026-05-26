@@ -477,14 +477,22 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
           {service === "apple_mail" && (
             <Form.Group>
               <Form.Label>Mail Account</Form.Label>
-              <Form.Select
-                value={(config.account as string) || "iCloud"}
+              <Form.Control
+                type="text"
+                list="mail-accounts-datalist"
+                value={(config.account as string) || ""}
+                placeholder="e.g. iCloud, harry@cognosa.net"
                 onChange={(e) => set("account", e.target.value)}
-              >
+              />
+              <datalist id="mail-accounts-datalist">
                 {MAIL_ACCOUNTS.map((a) => (
                   <option key={a.value} value={a.value}>{a.label}</option>
                 ))}
-              </Form.Select>
+              </datalist>
+              <Form.Text className="text-muted">
+                Must match the account name exactly as it appears in Mail.app → Settings → Accounts.
+                Suggestions in the dropdown are starting points; type the actual name if it differs.
+              </Form.Text>
             </Form.Group>
           )}
           {service === "gmail" && (
@@ -739,14 +747,23 @@ function Type56AutoReplyForm({ config, onChange, set }: Type56Props) {
               )}
             </>
           ) : (
-            <Form.Select
-              value={(config.account as string) || "iCloud"}
-              onChange={(e) => set("account", e.target.value)}
-            >
-              {MAIL_ACCOUNTS.map((a) => (
-                <option key={a.value} value={a.value}>{a.label}</option>
-              ))}
-            </Form.Select>
+            <>
+              <Form.Control
+                type="text"
+                list="mail-accounts-datalist-t56"
+                value={(config.account as string) || ""}
+                placeholder="e.g. iCloud, harry@cognosa.net"
+                onChange={(e) => set("account", e.target.value)}
+              />
+              <datalist id="mail-accounts-datalist-t56">
+                {MAIL_ACCOUNTS.map((a) => (
+                  <option key={a.value} value={a.value}>{a.label}</option>
+                ))}
+              </datalist>
+              <Form.Text className="text-muted">
+                Must match the account name exactly as it appears in Mail.app → Settings → Accounts.
+              </Form.Text>
+            </>
           )}
         </Form.Group>
       </Col>
