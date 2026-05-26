@@ -177,6 +177,27 @@ export default function Profile() {
 
   const connectedGmail = gmailAccounts.filter((a) => a.status === "active");
 
+  // Required-field guards per service. Save is disabled until the picked
+  // service has the data it needs to actually deliver a message — prevents
+  // saving an "apple_mail with empty destination" state that fails silently
+  // at run time and only surfaces via the per-run badge.
+  const validationError = ((): string | null => {
+    if (service === "") return null;
+    if (service === "apple_mail") {
+      if (!appleDestination.trim()) return "Destination email address is required.";
+    }
+    if (service === "gmail") {
+      if (!gmailAccountId) return "Pick a connected Workspace Gmail account.";
+    }
+    if (service === "gmail_imap") {
+      if (!imapEmail.trim()) return "Consumer Gmail address is required.";
+      if (!hasStoredPassword && !imapPassword.trim()) {
+        return "App Password is required (first-time setup).";
+      }
+    }
+    return null;
+  })();
+
   return (
     <Container className="py-4">
       <h2 className="mb-4">Profile</h2>
@@ -221,7 +242,7 @@ export default function Profile() {
           {info && <Alert variant="success" onClose={() => setInfo(null)} dismissible>{info}</Alert>}
 
           <Form.Group className="mb-3">
-            <Form.Label>Service</Form.Label>
+            <Form.Label>Outbound Email Service Selection</Form.Label>
             <Form.Check
               type="radio"
               id="ob-none"
@@ -234,9 +255,17 @@ export default function Profile() {
               type="radio"
               id="ob-apple"
               name="outbound_service"
-              label="Apple Mail (sends via Mail.app on the Mac Mini)"
+              label="Apple Mail (via the Mail.app client on this Mac)"
               checked={service === "apple_mail"}
-              onChange={() => setService("apple_mail")}
+              onChange={() => {
+                setService("apple_mail");
+                // First-time pre-fill: if the user has never set a
+                // destination yet, seed it with their login email — almost
+                // always the right answer for "send my workflow results to me".
+                if (!appleDestination.trim() && me?.email) {
+                  setAppleDestination(me.email);
+                }
+              }}
             />
             <Form.Check
               type="radio"
@@ -273,7 +302,9 @@ export default function Profile() {
                     onChange={(e) => setAppleAccountName(e.target.value)}
                   />
                   <Form.Text className="text-muted">
-                    Match the account name shown in Mail.app → Settings → Accounts (e.g. "iCloud", "acme_kpi_bot").
+                    The Mail.app account name — the "Description" field under Mail → Settings →
+                    Accounts (e.g. "iCloud", "Personal", or whatever you named it). If you renamed
+                    the account to match the email address, that's what to type here.
                   </Form.Text>
                 </Form.Group>
               </Col>
@@ -287,7 +318,9 @@ export default function Profile() {
                     onChange={(e) => setAppleDestination(e.target.value)}
                   />
                   <Form.Text className="text-muted">
-                    Required. Apple Mail accounts are identified by name, not by address — tell us where results should land.
+                    Required. Where workflow results should land (your inbox).
+                    Apple Mail accounts are identified by name, not by address —
+                    so we need this separately.
                   </Form.Text>
                 </Form.Group>
               </Col>
@@ -362,9 +395,18 @@ export default function Profile() {
             </Row>
           )}
 
-          <Button onClick={save} disabled={saving} variant="primary">
-            {saving ? "Saving…" : "Save"}
-          </Button>
+          <div className="d-flex align-items-center gap-3">
+            <Button
+              onClick={save}
+              disabled={saving || Boolean(validationError)}
+              variant="primary"
+            >
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            {validationError && (
+              <Form.Text className="text-warning">{validationError}</Form.Text>
+            )}
+          </div>
         </Card.Body>
       </Card>
     </Container>
