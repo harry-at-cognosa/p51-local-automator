@@ -17,6 +17,7 @@ import axiosClient from "../api/axiosClient";
 import { useSettingsStore, getTrimColor } from "../stores/useSettingsStore";
 import { useAuthStore } from "../stores/useAuthStore";
 import WorkflowTypeCardsGrid from "../components/WorkflowTypeCardsGrid";
+import AdHocOptionsList from "../components/AdHocOptionsList";
 import StatusBadge from "../components/StatusBadge";
 
 interface DashboardStats {
@@ -242,10 +243,16 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Section 4 — Available Workflow Types */}
+      {/* Section 4 — Standard Workflow Types */}
       <div style={trimStyle}>
-        <h5 className="text-center mb-3">Available Workflow Types</h5>
+        <h5 className="text-center mb-3">Standard Workflow Types</h5>
         <WorkflowTypeCardsGrid />
+      </div>
+
+      {/* Section 5 — Ad-hoc Workflow Options */}
+      <div style={trimStyle}>
+        <h5 className="text-center mb-3">Ad-hoc Workflow Options</h5>
+        <AdHocOptionsList />
       </div>
     </Container>
   );
