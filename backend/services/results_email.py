@@ -71,10 +71,34 @@ ARTIFACT_KINDS_BY_TYPE: dict[int, dict[str, str]] = {
         "categorized_json": r"^email_categorized\.json$",
         "summary_xlsx": r".*\.xlsx$",
     },
+    # Type 2 — Transaction Data Analyzer.
+    # analyze_data.py emits multiple xlsx/csv slices, charts, and the
+    # step3 summary markdown. Patterns are broad because the slice file
+    # names depend on the input. Users can mix and match.
+    2: {
+        "data_xlsx": r".*\.xlsx$",
+        "data_csv": r".*\.csv$",
+        "chart_png": r".*\.png$",
+        "summary_md": r"^step3_summary_report\.md$",
+        "analysis_json": r"^step5_llm_analysis\.json$",
+    },
     # Type 3 — Calendar Digest
     3: {
         "digest_json": r"^calendar_digest\.json$",
         "digest_md": r"^calendar_digest\.md$",
+    },
+    # Type 4 — SQL Query Runner
+    4: {
+        "results_xlsx": r"_results\.xlsx$",
+        "results_csv": r"_results\.csv$",
+        "analysis_json": r"_analysis\.json$",
+    },
+    # Type 7 — Analyze Data Collection (AWF-1).
+    # The agentic engine writes files with dynamic names — match by
+    # extension. Charts and the draft report are the typical deliverables.
+    7: {
+        "report_md": r".*\.md$",
+        "chart_png": r".*\.png$",
     },
 }
 
@@ -86,6 +110,15 @@ ARTIFACT_KIND_LABELS: dict[str, str] = {
     "summary_xlsx": "Excel summary report",
     "digest_json": "Calendar digest JSON",
     "digest_md": "Calendar digest Markdown",
+    # Type 2 / Type 4 / Type 7 additions
+    "data_xlsx": "Filtered data (Excel)",
+    "data_csv": "Filtered data (CSV)",
+    "chart_png": "Chart images (PNG)",
+    "summary_md": "Summary report (Markdown)",
+    "analysis_json": "LLM analysis (JSON)",
+    "results_xlsx": "Query results (Excel)",
+    "results_csv": "Query results (CSV)",
+    "report_md": "Analyst report (Markdown)",
 }
 
 
