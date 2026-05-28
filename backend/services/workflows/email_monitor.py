@@ -321,6 +321,24 @@ async def run_email_monitor(
         usage = llm_result["usage"]
         total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
+        # Detect LLM-side failure modes that would silently cascade to
+        # "every email labeled Other" if uncaught:
+        #
+        #   parse_error = True       — response wasn't valid JSON (most
+        #                              commonly because the response was
+        #                              truncated by max_tokens mid-emit).
+        #   isinstance(..., list)    — for any other shape, treat it as
+        #     == False                 a structural failure.
+        #
+        # Either case yields no usable categorizations; we surface a clear
+        # warning in the step's output_summary instead of silently falling
+        # back. The artifacts are still produced so the user can see what
+        # the runner tried to categorize — but the topic column will be
+        # all "Other" and they'll know why.
+        categorize_failed = (
+            isinstance(categorized, dict) and categorized.get("parse_error")
+        ) or not isinstance(categorized, list)
+
         # Merge LLM results back into email data
         cat_map = {}
         if isinstance(categorized, list):
@@ -360,7 +378,26 @@ async def run_email_monitor(
             t = e.get("topic", "Other")
             topic_counts[t] = topic_counts.get(t, 0) + 1
 
-        summary = f"Categorized {len(output_emails)} emails into {len(topic_counts)} topics. {urgent_count} urgent."
+        if categorize_failed:
+            summary = (
+                f"WARNING: LLM categorization failed — response was not valid JSON "
+                f"(likely truncated at the model's max_tokens limit). All "
+                f"{len(output_emails)} emails fell back to topic 'Other'. The "
+                f"output artifacts are still produced but the topic column is "
+                f"not meaningful. Try reducing email_fetch_limit, narrowing the "
+                f"period, or raising max_tokens in llm_service.judge_structured."
+            )
+            log.warning(
+                "email_monitor_categorize_parse_failure",
+                run_id=run.run_id,
+                emails=len(output_emails),
+                output_tokens=usage.get("output_tokens", 0),
+            )
+        else:
+            summary = (
+                f"Categorized {len(output_emails)} emails into "
+                f"{len(topic_counts)} topics. {urgent_count} urgent."
+            )
         await engine.complete_step(session, step2, output_summary=summary, llm_tokens=total_tokens)
 
         # ── Step 3: Generate Excel report ─────────────────────

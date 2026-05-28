@@ -26,9 +26,16 @@ def judge_structured(
     system: str,
     user_prompt: str,
     model: str = "claude-sonnet-4-20250514",
-    max_tokens: int = 4096,
+    max_tokens: int = 16384,
 ) -> dict:
-    """Make a single LLM call expecting JSON output. Returns parsed dict + token usage."""
+    """Make a single LLM call expecting JSON output. Returns parsed dict + token usage.
+
+    `max_tokens` defaults to 16384 — large enough to comfortably hold the
+    JSON response for ~250 email categorizations before truncation becomes
+    a risk. The model (claude-sonnet-4) supports much higher caps; raise
+    this if a single call routinely exceeds 16k output tokens. Callers
+    that know their output is small can pass a smaller value to save tokens.
+    """
     client = get_client()
 
     response = client.messages.create(
