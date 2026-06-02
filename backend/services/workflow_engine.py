@@ -45,6 +45,8 @@ SETTING_ANALYZE_MAX_AGENT_TURNS       = "analyze_max_agent_turns"       # Type 7
 SETTING_AUDIT_MAX_AGENT_TURNS         = "audit_max_agent_turns"         # Type 7
 SETTING_LLM_MAX_TOKENS                = "llm_max_tokens"                # Type 7
 SETTING_STEP_SUMMARY_TRUNCATE_CHARS   = "step_summary_truncate_chars"   # Type 7
+SETTING_REAPER_MAX_SENDERS            = "reaper_max_senders"            # Type 8 — max sender rows
+SETTING_REAPER_FETCH_LIMIT_PER_SENDER = "reaper_fetch_limit_per_sender" # Type 8 — max msgs scanned per sender per run
 
 # Absolute ceilings — operator cannot exceed via api_settings. Hardcoded
 # runaway-cost guards. Bump only by editing source.

@@ -339,6 +339,51 @@ end tell
     return {"ok": True, "output": result.stdout.strip()}
 
 
+async def mail_delete_message(account: str, mailbox: str, message_id: int) -> dict:
+    """Move a single message to Trash via AppleScript.
+
+    The Apple Mail MCP exposes no delete/trash tool, so we use osascript
+    directly (same approach as mail_get_message_source / mail_save_draft).
+    Mail.app's `delete` command on a message moves it to the account's Trash
+    mailbox — recoverable, not a permanent purge. Mail.app must be running in
+    a GUI session (same constraint as Apple Mail monitoring/sending).
+
+    Returns {"ok": True} on success; raises RuntimeError on osascript failure
+    or {"ok": False, "error": ...} when Mail.app reports a scripting error
+    (e.g. the message id no longer exists).
+    """
+    script = f'''
+tell application "Mail"
+    try
+        set theAccount to first account whose name is "{_applescript_escape(account)}"
+        set theMailbox to mailbox "{_applescript_escape(mailbox)}" of theAccount
+        set theMessage to (first message of theMailbox whose id is {int(message_id)})
+        delete theMessage
+        return "deleted"
+    on error errMsg
+        return "ERROR:" & errMsg
+    end try
+end tell
+'''.strip()
+
+    def _run():
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+    result = await asyncio.to_thread(_run)
+    if result.returncode != 0:
+        raise RuntimeError(f"mail_delete_message failed: {result.stderr.strip()[:500]}")
+    output = result.stdout.strip()
+    if output.startswith("ERROR:"):
+        log.warning("mail_delete_message_script_error", message_id=message_id, error=output[6:][:200])
+        return {"ok": False, "error": output[6:]}
+    return {"ok": True, "output": output}
+
+
 # ── Apple Calendar helpers ───────────────────────────────────
 
 

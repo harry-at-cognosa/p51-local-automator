@@ -100,6 +100,11 @@ ARTIFACT_KINDS_BY_TYPE: dict[int, dict[str, str]] = {
         "report_md": r".*\.md$",
         "chart_png": r".*\.png$",
     },
+    # Type 8 — Email Reaper. The deletion report in both formats.
+    8: {
+        "reaper_report_csv": r"^email_reaper_report\.csv$",
+        "reaper_report_md": r"^email_reaper_report\.md$",
+    },
 }
 
 
@@ -119,6 +124,8 @@ ARTIFACT_KIND_LABELS: dict[str, str] = {
     "results_xlsx": "Query results (Excel)",
     "results_csv": "Query results (CSV)",
     "report_md": "Analyst report (Markdown)",
+    "reaper_report_csv": "Deletion report (CSV)",
+    "reaper_report_md": "Deletion report (Markdown)",
 }
 
 

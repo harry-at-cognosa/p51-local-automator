@@ -55,16 +55,20 @@ router_gmail_oauth = APIRouter(prefix="/gmail")
 #   gmail.readonly    — list/get/search messages (B1; types 1/5/6 read)
 #   gmail.compose     — drafts.create (type 5 + type-6 save-as-draft)
 #   gmail.send        — messages.send (type-6 approve-and-send)
+#   gmail.modify      — messages.trash (type 8 Email Reaper move-to-Trash)
 #   calendar.readonly — list calendars + events.list (Google Calendar
 #                       digest, type 3 google_calendar service path)
 # Existing accounts connected before a scope expansion need to re-consent
 # (the next click of Connect on /app/connections triggers Google's
 # consent screen with the current SCOPES set; on success the row's
-# `scopes` column is overwritten with the new set).
+# `scopes` column is overwritten with the new set). Email Reaper LIVE runs
+# pre-check the account's granted scopes for gmail.modify and fail with a
+# reconnect message if absent; PREVIEW runs need only gmail.readonly.
 SCOPES = " ".join([
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar.readonly",
 ])
 

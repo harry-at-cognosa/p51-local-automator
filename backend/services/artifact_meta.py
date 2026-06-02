@@ -149,6 +149,7 @@ _SUBJECT_ADAPTERS = {
     5: _subject_email_workflow,
     6: _subject_email_workflow,
     7: _subject_awf1,
+    8: _subject_email_workflow,  # Email Reaper — same single-account shape
 }
 
 

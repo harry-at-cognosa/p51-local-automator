@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Accordion, Form, Row, Col, Badge, Button, InputGroup } from "react-bootstrap";
 import { Link } from "react-router-dom";
 import SchemaConfigForm, { type FieldDescriptor } from "./SchemaConfigForm";
@@ -98,6 +98,19 @@ const LIMITS_TYPE56: LimitField[] = [
     help: "After dedup-by-sender, run stops generating once this many drafts exist." },
 ];
 
+// Email Reaper (type 8) caps.
+const REAPER_WINDOW_MIN = 5;
+const REAPER_WINDOW_MAX = 365;
+const REAPER_WINDOW_DEFAULT = 14;
+const REAPER_MAX_SENDERS_DEFAULT = 150;
+
+const LIMITS_TYPE8: LimitField[] = [
+  { key: "reaper_max_senders", label: "Max sender rows", defaultValue: REAPER_MAX_SENDERS_DEFAULT, min: 1,
+    help: "Upper bound on the sender list for this workflow." },
+  { key: "reaper_fetch_limit_per_sender", label: "Max messages scanned per sender", defaultValue: 500, min: 1,
+    help: "Per run, per sender. Caps how many matches are examined/trashed." },
+];
+
 interface Props {
   typeId: number;
   config: Record<string, unknown>;
@@ -186,6 +199,17 @@ export default function WorkflowConfigForm({
     return (
       <>
         <Type3CalendarDigestForm config={config} onChange={onChange} set={set} />
+        {emailSection}
+      </>
+    );
+  }
+
+  // Email Reaper (type 8) — hand-tuned form: account picker + preview
+  // switch + editable sender table with CSV import/export. Emailable.
+  if (typeId === 8) {
+    return (
+      <>
+        <Type8EmailReaperForm config={config} onChange={onChange} set={set} />
         {emailSection}
       </>
     );
@@ -657,6 +681,348 @@ function Type1EmailMonitorForm({ config, onChange, set }: Type1Props) {
         </div>
       )}
       <AdvancedLimitsSection config={config} set={set} fields={LIMITS_TYPE1} />
+    </>
+  );
+}
+
+
+// ── Type 8 Email Reaper — single account + editable sender list ──────────
+
+interface SenderRow {
+  from_address: string;
+  safety_window_days: number;
+}
+
+const REAPER_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+function clampWindow(n: number): number {
+  if (Number.isNaN(n)) return REAPER_WINDOW_DEFAULT;
+  if (n < REAPER_WINDOW_MIN) return REAPER_WINDOW_MIN;
+  if (n > REAPER_WINDOW_MAX) return REAPER_WINDOW_MAX;
+  return Math.trunc(n);
+}
+
+function Type8EmailReaperForm({ config, onChange, set }: Type1Props) {
+  const service = (config.service as string) || "apple_mail";
+  const senders: SenderRow[] = Array.isArray(config.senders)
+    ? (config.senders as SenderRow[])
+    : [];
+  const previewOnly = config.preview_only !== false; // default ON
+  const maxSenders =
+    typeof config.reaper_max_senders === "number"
+      ? (config.reaper_max_senders as number)
+      : REAPER_MAX_SENDERS_DEFAULT;
+
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [gmailError, setGmailError] = useState<string | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (service !== "gmail") return;
+    setGmailLoading(true);
+    setGmailError(null);
+    axiosClient
+      .get<GmailAccountOption[]>("/gmail/accounts")
+      .then((res) => setGmailAccounts(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setGmailError(err?.response?.data?.detail || err?.message || "Failed to load Gmail accounts.");
+      })
+      .finally(() => setGmailLoading(false));
+  }, [service]);
+
+  const handleServiceChange = (newService: string) => {
+    const next: Record<string, unknown> = { ...config, service: newService };
+    delete next.account;
+    delete next.account_id;
+    delete next.email;
+    delete next.app_password;
+    onChange(next);
+  };
+
+  const setSenders = (rows: SenderRow[]) => set("senders", rows);
+
+  const updateRow = (i: number, field: keyof SenderRow, value: string) => {
+    const rows = senders.map((r) => ({ ...r }));
+    if (field === "safety_window_days") {
+      rows[i].safety_window_days = value === "" ? (NaN as unknown as number) : parseInt(value, 10);
+    } else {
+      rows[i].from_address = value;
+    }
+    setSenders(rows);
+  };
+
+  const addRow = () => {
+    if (senders.length >= maxSenders) return;
+    setSenders([...senders, { from_address: "", safety_window_days: REAPER_WINDOW_DEFAULT }]);
+  };
+
+  const removeRow = (i: number) => {
+    setSenders(senders.filter((_, idx) => idx !== i));
+  };
+
+  const downloadCsv = () => {
+    const lines = ["from_address,safety_window_days"];
+    for (const r of senders) {
+      const w = clampWindow(Number(r.safety_window_days));
+      lines.push(`${r.from_address},${w}`);
+    }
+    const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "email_reaper_senders.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || "");
+      const rows: SenderRow[] = [];
+      const seen = new Set<string>();
+      let skipped = 0;
+      let clamped = 0;
+      let duped = 0;
+      const rawLines = text.split(/\r?\n/);
+      for (const raw of rawLines) {
+        const line = raw.trim();
+        if (!line) continue;
+        const comma = line.indexOf(",");
+        const addr = (comma === -1 ? line : line.slice(0, comma)).trim();
+        const windowStr = comma === -1 ? "" : line.slice(comma + 1).trim();
+        if (addr.toLowerCase() === "from_address") continue; // header
+        if (!REAPER_EMAIL_RE.test(addr)) { skipped++; continue; }
+        const key = addr.toLowerCase();
+        if (seen.has(key)) { duped++; continue; }
+        let w = parseInt(windowStr, 10);
+        if (Number.isNaN(w)) w = REAPER_WINDOW_DEFAULT;
+        const cw = clampWindow(w);
+        if (cw !== w) clamped++;
+        seen.add(key);
+        rows.push({ from_address: addr, safety_window_days: cw });
+        if (rows.length >= maxSenders) break;
+      }
+      setSenders(rows);
+      const bits = [`imported ${rows.length}`];
+      if (skipped) bits.push(`${skipped} invalid skipped`);
+      if (duped) bits.push(`${duped} duplicate(s) removed`);
+      if (clamped) bits.push(`${clamped} window(s) clamped`);
+      setImportNote(bits.join(", ") + ` (cap ${maxSenders}).`);
+    };
+    reader.readAsText(file);
+    // Reset so re-uploading the same file fires onChange again.
+    e.target.value = "";
+  };
+
+  const activeGmailAccounts = gmailAccounts.filter((a) => a.status === "active");
+  const hasStoredAppPassword = Boolean(config.app_password_enc);
+
+  return (
+    <>
+      <Row className="g-3">
+        <Col md={6}>
+          <Form.Group>
+            <Form.Label>Email Service</Form.Label>
+            <Form.Select value={service} onChange={(e) => handleServiceChange(e.target.value)}>
+              <option value="apple_mail">Apple Mail</option>
+              <option value="gmail">Gmail (connected workspace account)</option>
+              <option value="gmail_imap">Gmail (App Password — for consumer Gmail)</option>
+            </Form.Select>
+            <Form.Text className="text-muted">
+              The Reaper operates on one account of one type per workflow.
+            </Form.Text>
+          </Form.Group>
+        </Col>
+        <Col md={6}>
+          {service === "apple_mail" && (
+            <Form.Group>
+              <Form.Label>Mail Account</Form.Label>
+              <Form.Control
+                type="text"
+                list="reaper-mail-accounts-datalist"
+                value={(config.account as string) || ""}
+                placeholder="e.g. iCloud, harry@cognosa.net"
+                onChange={(e) => set("account", e.target.value)}
+              />
+              <datalist id="reaper-mail-accounts-datalist">
+                {MAIL_ACCOUNTS.map((a) => (
+                  <option key={a.value} value={a.value}>{a.label}</option>
+                ))}
+              </datalist>
+              <Form.Text className="text-muted">
+                Must match the account name exactly as it appears in Mail.app → Settings → Accounts.
+              </Form.Text>
+            </Form.Group>
+          )}
+          {service === "gmail" && (
+            <Form.Group>
+              <Form.Label>Gmail Account</Form.Label>
+              <Form.Select
+                value={(config.account_id as number | undefined) ?? ""}
+                onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
+                disabled={gmailLoading || activeGmailAccounts.length === 0}
+              >
+                <option value="">
+                  {gmailLoading
+                    ? "Loading…"
+                    : activeGmailAccounts.length === 0
+                    ? "(no accounts connected)"
+                    : "Select a connected account…"}
+                </option>
+                {activeGmailAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.email}</option>
+                ))}
+              </Form.Select>
+              {gmailError && <Form.Text className="text-danger">{gmailError}</Form.Text>}
+              <Form.Text className="text-muted d-block">
+                Live deletion needs the account reconnected once to grant delete permission
+                (gmail.modify). Preview runs work without reconnecting.
+              </Form.Text>
+            </Form.Group>
+          )}
+          {service === "gmail_imap" && (
+            <Form.Group>
+              <Form.Label>Gmail address</Form.Label>
+              <Form.Control
+                type="email"
+                value={(config.email as string) || ""}
+                placeholder="you@gmail.com"
+                onChange={(e) => set("email", e.target.value)}
+              />
+            </Form.Group>
+          )}
+        </Col>
+        {service === "gmail_imap" && (
+          <>
+            <Col md={6}>
+              <Form.Group>
+                <Form.Label>
+                  App password
+                  <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer"
+                     className="ms-2" style={{ fontSize: "0.85em" }}>get one</a>
+                </Form.Label>
+                <Form.Control
+                  type="password"
+                  value={(config.app_password as string) || ""}
+                  placeholder={hasStoredAppPassword ? "(stored — leave blank to keep, or type to replace)" : "16-char code"}
+                  onChange={(e) => set("app_password", e.target.value)}
+                />
+              </Form.Group>
+            </Col>
+            <Col md={6}>
+              <Form.Group>
+                <Form.Label>Credential storage</Form.Label>
+                <Form.Check
+                  type="radio" id="t8-storage-enc" name="t8_storage_method"
+                  label="Encrypted database column (recommended)"
+                  checked={((config.storage_method as string) || "encrypted_db") === "encrypted_db"}
+                  onChange={() => set("storage_method", "encrypted_db")}
+                />
+                <Form.Check
+                  type="radio" id="t8-storage-plain" name="t8_storage_method"
+                  label="Plaintext .gmailpasswords.json (per-machine)"
+                  checked={(config.storage_method as string) === "plaintext_file"}
+                  onChange={() => set("storage_method", "plaintext_file")}
+                />
+              </Form.Group>
+            </Col>
+          </>
+        )}
+        <Col md={12}>
+          <Form.Group className="border rounded p-3">
+            <Form.Check
+              type="switch"
+              id="reaper-preview-only"
+              checked={previewOnly}
+              onChange={(e) => set("preview_only", e.target.checked)}
+              label={previewOnly ? "Preview only — find and report, delete nothing" : "LIVE — matching emails will be moved to Trash"}
+            />
+            <Form.Text className="text-muted">
+              Every run writes a deletion report. With preview on, nothing is deleted — turn it
+              off to actually move matches to Trash (recoverable from the account's Trash/Bin).
+            </Form.Text>
+          </Form.Group>
+        </Col>
+      </Row>
+
+      <div className="mt-3">
+        <div className="d-flex align-items-center justify-content-between mb-2">
+          <Form.Label className="mb-0">
+            Sender list <Badge bg="secondary">{senders.length} / {maxSenders}</Badge>
+          </Form.Label>
+          <div className="d-flex gap-2">
+            <Button size="sm" variant="outline-secondary" onClick={downloadCsv} disabled={senders.length === 0}>
+              Download CSV
+            </Button>
+            <Button size="sm" variant="outline-secondary" onClick={() => fileInputRef.current?.click()}>
+              Upload CSV
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: "none" }}
+              onChange={handleUpload}
+            />
+          </div>
+        </div>
+        <Form.Text className="text-muted d-block mb-2">
+          For each sender, emails older than (today − safety window days) are reaped. Window {REAPER_WINDOW_MIN}–{REAPER_WINDOW_MAX} days.
+          Upload replaces the list; CSV format is <code>from_address,safety_window_days</code>.
+        </Form.Text>
+        {importNote && <div className="text-muted small mb-2">{importNote}</div>}
+        <div style={{ maxHeight: 320, overflowY: "auto" }} className="border rounded">
+          {senders.length === 0 ? (
+            <div className="text-muted small p-3">
+              No senders yet. Add a row or upload a CSV.
+            </div>
+          ) : (
+            senders.map((r, i) => (
+              <Row className="g-2 align-items-center px-2 py-1" key={i}>
+                <Col xs={7}>
+                  <Form.Control
+                    type="email"
+                    size="sm"
+                    placeholder="sender@example.com"
+                    value={r.from_address}
+                    isInvalid={Boolean(r.from_address) && !REAPER_EMAIL_RE.test(r.from_address)}
+                    onChange={(e) => updateRow(i, "from_address", e.target.value)}
+                  />
+                </Col>
+                <Col xs={3}>
+                  <InputGroup size="sm">
+                    <Form.Control
+                      type="number"
+                      min={REAPER_WINDOW_MIN}
+                      max={REAPER_WINDOW_MAX}
+                      value={Number.isNaN(r.safety_window_days) ? "" : r.safety_window_days}
+                      onChange={(e) => updateRow(i, "safety_window_days", e.target.value)}
+                    />
+                    <InputGroup.Text>days</InputGroup.Text>
+                  </InputGroup>
+                </Col>
+                <Col xs={2} className="text-end">
+                  <Button size="sm" variant="outline-danger" onClick={() => removeRow(i)}>Remove</Button>
+                </Col>
+              </Row>
+            ))
+          )}
+        </div>
+        <Button size="sm" variant="outline-primary" className="mt-2" onClick={addRow}
+                disabled={senders.length >= maxSenders}>
+          Add sender
+        </Button>
+      </div>
+
+      <AdvancedLimitsSection config={config} set={set} fields={LIMITS_TYPE8} />
     </>
   );
 }

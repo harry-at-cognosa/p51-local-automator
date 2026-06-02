@@ -48,6 +48,7 @@ from backend.services.workflows.data_analyzer import run_data_analyzer
 from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
 from backend.services.workflows.email_auto_reply_draft import run_email_auto_reply_draft
 from backend.services.workflows.email_monitor import run_email_monitor
+from backend.services.workflows.email_reaper import run_email_reaper
 from backend.services.workflows.sql_runner import run_sql_runner
 
 log = get_logger("workflows_api")
@@ -69,7 +70,8 @@ def _normalize_secrets_in_config(
     `connection_string_enc` from the prior config — so editing
     unrelated fields (query, query_name) doesn't wipe the secret.
 
-    For type 1 (Email Topic Monitor) with `service == "gmail_imap"`:
+    For types 1 (Email Topic Monitor) and 8 (Email Reaper) with
+    `service == "gmail_imap"`:
     same blank-to-preserve treatment for the `app_password` field —
     either encrypted into `app_password_enc` (encrypted_db) or routed
     to the shared `.gmailpasswords.json` via gmail_password_store
@@ -90,7 +92,7 @@ def _normalize_secrets_in_config(
             config["connection_string_enc"] = existing_config["connection_string_enc"]
         config.pop("connection_string", None)
         return config
-    if type_id == 1 and config.get("service") == "gmail_imap":
+    if type_id in (1, 8) and config.get("service") == "gmail_imap":
         config = dict(config)
         storage = config.get("storage_method", "encrypted_db")
         pw = config.get("app_password", "")
@@ -801,6 +803,7 @@ WORKFLOW_RUNNERS = {
     5: run_email_auto_reply_draft,
     6: run_email_auto_reply_approve,
     7: run_analyze_data_collection,
+    8: run_email_reaper,
 }
 
 

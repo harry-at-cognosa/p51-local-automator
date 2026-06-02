@@ -65,6 +65,8 @@ All numeric workflow caps resolve through `resolve_int_setting()` in `backend/se
 | `audit_max_agent_turns` | 12 | Type 7 | Agent loop turns in the audit stage |
 | `llm_max_tokens` | 4096 | Type 7 | Per-call max_tokens for every LLM-bearing stage |
 | `step_summary_truncate_chars` | 2000 | Type 7 | Step output truncation |
+| `reaper_max_senders` | 150 | Type 8 | Max sender rows per Email Reaper workflow |
+| `reaper_fetch_limit_per_sender` | 500 | Type 8 | Max messages scanned (and trashed) per sender per run |
 
 **Absolute ceilings** live in code as runaway-cost guards and cannot be exceeded via api_settings: `ABS_MAX_AGENT_TURNS = 100`, `ABS_MAX_LLM_TOKENS = 16384` in `workflow_engine.py`. Values above these are silently clamped at run time. Bump only by editing source.
 
@@ -102,7 +104,7 @@ No backfill — artifacts produced before this commit have no meta block.
 
 Workflows can optionally email selected artifacts to the owner's designated outbound account after a run completes. The hook lives in `_run_workflow_background` in `backend/api/workflows.py` after the per-type runner returns — this catches manual triggers, scheduled APScheduler fires, and ad-hoc runs through one entry point.
 
-**Per-type opt-in:** `workflow_types.emailable_results` (boolean, default FALSE). Seeded TRUE for type 1 (Email Topic Monitor) and type 3 (Calendar Digest) by migration `b6d4e2c9f8a7`. Frontend hides the "Email results" section in the workflow config form when false.
+**Per-type opt-in:** `workflow_types.emailable_results` (boolean, default FALSE). Seeded TRUE for type 1 (Email Topic Monitor) and type 3 (Calendar Digest) by migration `b6d4e2c9f8a7`, and for type 8 (Email Reaper) by migration `f9c2a7e1b8d4`. Frontend hides the "Email results" section in the workflow config form when false.
 
 **Per-workflow opt-in:** the workflow config carries `email_results = { enabled: bool, artifact_kinds: [str] }`. `artifact_kinds` are stable keys defined per type in `backend/services/results_email.py` `ARTIFACT_KINDS_BY_TYPE` (regex patterns matched against artifact basenames at send time).
 
@@ -116,6 +118,18 @@ Workflows can optionally email selected artifacts to the owner's designated outb
 **Delivery log:** every attempt — including skips — writes one row to `workflow_run_email_log` (run_id, user_id, service, recipient, subject, status ∈ `sent`/`failed`/`skipped_no_outbound`/`skipped_no_artifacts`/`skipped_disabled`, error_message, attachment_count). The run's `status` is NOT changed by email outcome; a run succeeds whether or not delivery succeeded. The UI reads the latest log row per run to decorate with an envelope badge (`EmailSendBadge` component) in the run list views.
 
 **Adding email support to a new type:** (a) flip the type's `emailable_results` to TRUE via migration; (b) add an `ARTIFACT_KINDS_BY_TYPE[type_id]` entry mapping kind keys to filename regexes; (c) add labels to `ARTIFACT_KIND_LABELS`. The runner itself needs no change — `send_results_email` finds attachments by scanning `run.artifacts` against the regexes.
+
+## Email Reaper (type 8) — the destructive workflow
+
+Email Reaper is the first and only workflow that destructively modifies external data: it moves to Trash every email from a configured list of sender addresses older than that sender's per-row "safety window" (5–365 days, default 14). Runner: `backend/services/workflows/email_reaper.py`. One account of one type per workflow (`apple_mail` / `gmail` OAuth / `gmail_imap`), resolved the same way as type 1.
+
+Safety model (do not weaken without explicit sign-off):
+- **Trash, never purge.** All three backends move to Trash (recoverable), not permanent delete. Gmail OAuth → `gmail_client.gmail_trash_messages` (`messages.trash`); consumer Gmail → `gmail_imap_client.imap_trash_messages` (COPY to `[Gmail]/Trash` + `\Deleted` + EXPUNGE); Apple Mail → `mcp_client.mail_delete_message` (osascript `delete`).
+- **Preview by default.** Config `preview_only`; the runner's `_is_preview` treats anything other than an explicit `False` as preview (a missing key previews). Preview finds + reports, deletes nothing.
+- **Always reports.** Every run (preview or live) writes `email_reaper_report.{csv,md}` artifacts — one row per matched message + per-sender summary.
+- **Scan scope is all mail** (incl. archived): Gmail `before:` query with no label filter; IMAP `[Gmail]/All Mail`; Apple Mail searches the account and post-filters by date.
+
+Gmail trash requires the `gmail.modify` scope (added to `SCOPES` in `gmail_oauth.py`). Accounts connected before this need to reconnect; LIVE runs pre-check `account.scopes` and fail with a reconnect message, PREVIEW runs don't. The sender list lives in `config.senders` and is edited via a hand-tuned form (`Type8EmailReaperForm` in `WorkflowConfigForm.tsx`) with an inline scrollable table plus CSV download/upload (canonical format: header `from_address,safety_window_days`). `emailable_results=TRUE`, `schedulable=TRUE`. Seeded by migration `f9c2a7e1b8d4` (type_id pinned to 8 — the runner dispatch keys on it).
 
 ## Versioning
 

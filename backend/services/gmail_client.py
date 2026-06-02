@@ -510,6 +510,82 @@ async def gmail_send_message(
     }
 
 
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+
+
+def _account_has_modify_scope(account: GmailAccounts) -> bool:
+    """True when the account's granted scopes include gmail.modify.
+
+    Trashing a message requires gmail.modify; accounts connected before the
+    scope was added to SCOPES will lack it and must reconnect (re-consent).
+    """
+    granted = (account.scopes or "").split()
+    return GMAIL_MODIFY_SCOPE in granted
+
+
+async def gmail_search_senders_before(
+    session: AsyncSession,
+    account_id: int,
+    from_address: str,
+    before_date: str,
+    limit: int = 500,
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+) -> list[dict[str, str]]:
+    """Find messages from `from_address` dated strictly before `before_date`.
+
+    `before_date` is a Gmail-style date string ``YYYY/MM/DD``. No labelIds are
+    applied, so the search spans All Mail (including archived) — matching the
+    Email Reaper "all mail" scan scope. Returns id/sender/subject/date dicts.
+    """
+    query = f"from:{from_address} before:{before_date}"
+    return await gmail_search(
+        session, account_id, query, limit=limit,
+        workflow_id=workflow_id, run_id=run_id,
+    )
+
+
+async def gmail_trash_messages(
+    session: AsyncSession,
+    account_id: int,
+    message_ids: list[str],
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+) -> list[str]:
+    """Move the given messages to Trash via users.messages.trash.
+
+    Recoverable (Gmail retains trashed mail ~30 days). Requires the
+    gmail.modify scope. Per-message failures are logged and skipped; returns
+    the list of ids successfully trashed.
+    """
+    account = await _load_active_account(session, account_id)
+    creds = await _ensure_fresh_credentials(session, account)
+
+    def _trash_all():
+        service = _build_service(creds)
+        trashed: list[str] = []
+        for mid in message_ids:
+            try:
+                service.users().messages().trash(userId="me", id=mid).execute()
+                trashed.append(mid)
+            except Exception as e:  # noqa: BLE001 - degrade per message
+                log.warning("gmail_trash_message_failed", account_id=account_id,
+                            message_id=mid, error=str(e)[:200])
+        return trashed
+
+    try:
+        trashed = await asyncio.to_thread(_trash_all)
+    except Exception as e:
+        await _log_event(session, account_id, "trash_messages", workflow_id, run_id, str(e)[:500])
+        await _flip_disconnected_if_refresh_failure(session, account, e)
+        raise
+
+    account.last_used_at = datetime.now(timezone.utc)
+    await _log_event(session, account_id, "trash_messages", workflow_id, run_id)
+    await session.flush()
+    return trashed
+
+
 async def gmail_search(
     session: AsyncSession,
     account_id: int,
