@@ -843,24 +843,41 @@ function Type8EmailReaperForm({ config, onChange, set }: Type1Props) {
         </Col>
         <Col md={6}>
           {service === "apple_mail" && (
-            <Form.Group>
-              <Form.Label>Mail Account</Form.Label>
-              <Form.Control
-                type="text"
-                list="reaper-mail-accounts-datalist"
-                value={(config.account as string) || ""}
-                placeholder="e.g. iCloud, harry@cognosa.net"
-                onChange={(e) => set("account", e.target.value)}
-              />
-              <datalist id="reaper-mail-accounts-datalist">
-                {MAIL_ACCOUNTS.map((a) => (
-                  <option key={a.value} value={a.value}>{a.label}</option>
-                ))}
-              </datalist>
-              <Form.Text className="text-muted">
-                Must match the account name exactly as it appears in Mail.app → Settings → Accounts.
-              </Form.Text>
-            </Form.Group>
+            <>
+              <Form.Group className="mb-2">
+                <Form.Label>Mail Account</Form.Label>
+                <Form.Control
+                  type="text"
+                  list="reaper-mail-accounts-datalist"
+                  value={(config.account as string) || ""}
+                  placeholder="e.g. iCloud, harry@cognosa.net"
+                  onChange={(e) => set("account", e.target.value)}
+                />
+                <datalist id="reaper-mail-accounts-datalist">
+                  {MAIL_ACCOUNTS.map((a) => (
+                    <option key={a.value} value={a.value}>{a.label}</option>
+                  ))}
+                </datalist>
+                <Form.Text className="text-muted">
+                  Must match the account name exactly as it appears in Mail.app → Settings → Accounts.
+                </Form.Text>
+              </Form.Group>
+              <Form.Group>
+                <Form.Label>Mailboxes to scan</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={Array.isArray(config.mailboxes) ? (config.mailboxes as string[]).join(", ") : ""}
+                  placeholder="INBOX (default) — e.g. INBOX, 1-Newsletters"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    set("mailboxes", v ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined);
+                  }}
+                />
+                <Form.Text className="text-muted">
+                  Apple Mail only. Comma-separated Mail.app mailbox names. Blank = INBOX. Each is scanned and filtered by sender + age.
+                </Form.Text>
+              </Form.Group>
+            </>
           )}
           {service === "gmail" && (
             <Form.Group>

@@ -42,10 +42,22 @@ def test_is_preview_only_explicit_false_arms(value, expected):
 
 def test_resolve_apple_mail_defaults_to_icloud():
     assert _resolve_single_account({"service": "apple_mail"}) == {
-        "service": "apple_mail", "account": "iCloud",
+        "service": "apple_mail", "account": "iCloud", "mailboxes": ["INBOX"],
     }
     # apple_mail is the default service when unspecified.
     assert _resolve_single_account({})["service"] == "apple_mail"
+
+
+def test_resolve_apple_mail_mailboxes():
+    # Custom mailbox list is honored and whitespace-trimmed.
+    acct = _resolve_single_account(
+        {"service": "apple_mail", "account": "iCloud", "mailboxes": ["INBOX", " 1-Newsletters ", ""]}
+    )
+    assert acct["mailboxes"] == ["INBOX", "1-Newsletters"]
+    # Empty / non-list falls back to INBOX.
+    assert _resolve_single_account(
+        {"service": "apple_mail", "mailboxes": []}
+    )["mailboxes"] == ["INBOX"]
 
 
 def test_resolve_gmail_requires_int_account_id():

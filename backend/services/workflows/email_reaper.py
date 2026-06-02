@@ -12,6 +12,8 @@ Steps:
 Config (from user_workflows.config):
     service: "apple_mail" | "gmail" | "gmail_imap"
     account: str          - Mail.app account name (apple_mail)
+    mailboxes: list[str]  - Mail.app mailboxes to scan (apple_mail only;
+                            default ["INBOX"]). Gmail/IMAP always scan all mail.
     account_id: int       - GmailAccounts.id          (gmail OAuth)
     email: str            - consumer Gmail address     (gmail_imap)
     senders: list[{from_address: str, safety_window_days: int}]
@@ -65,7 +67,15 @@ def _resolve_single_account(config: dict) -> dict:
     an unusable config (surfaced as a failed run)."""
     service = config.get("service", "apple_mail")
     if service == "apple_mail":
-        return {"service": "apple_mail", "account": config.get("account", "iCloud")}
+        raw = config.get("mailboxes")
+        mailboxes = [str(m).strip() for m in raw if str(m).strip()] if isinstance(raw, list) else []
+        if not mailboxes:
+            mailboxes = ["INBOX"]
+        return {
+            "service": "apple_mail",
+            "account": config.get("account", "iCloud"),
+            "mailboxes": mailboxes,
+        }
     if service == "gmail":
         account_id = config.get("account_id")
         if not isinstance(account_id, int):
@@ -172,19 +182,31 @@ async def _scan_sender(
         return out
 
     if service == "apple_mail":
-        # Apple Mail MCP search spans the account; post-filter by date and
-        # confirm the sender actually matches (search hits subject too).
-        msgs = await mcp_client.mail_search_messages(
-            addr, account=account["account"], limit=fetch_limit,
-        )
-        for m in msgs:
-            sender = str(m.get("sender", "")).lower()
-            if addr.lower() not in sender:
+        # The MCP search_messages tool is unreliable (returns empty / non-JSON
+        # depending on mailbox), so we LIST each configured mailbox and filter
+        # in Python — the same approach Email Topic Monitor uses. Listing per
+        # mailbox also gives us each match's real mailbox, which the trash step
+        # needs to delete it. Default scope is INBOX; users add folders via
+        # config "mailboxes".
+        for mailbox in account.get("mailboxes", ["INBOX"]):
+            if len(out) >= fetch_limit:
+                break
+            try:
+                msgs = await mcp_client.mail_list_messages(
+                    account["account"], mailbox, limit=fetch_limit,
+                )
+            except Exception as e:  # noqa: BLE001 - skip folders that error
+                log.warning("reaper_apple_list_failed", account=account["account"],
+                            mailbox=mailbox, error=str(e)[:200])
                 continue
-            d = parse_mail_date(m.get("date"))
-            if d is None or d >= cutoff:
-                continue
-            out.append(_match(addr, window, m, mailbox=m.get("mailbox", "INBOX"), now=now))
+            for m in msgs:
+                sender = str(m.get("sender", "")).lower()
+                if addr.lower() not in sender:
+                    continue
+                d = parse_mail_date(m.get("date"))
+                if d is None or d >= cutoff:
+                    continue
+                out.append(_match(addr, window, m, mailbox=mailbox, now=now))
         return out
 
     raise ValueError(f"Unsupported email service: {service!r}")

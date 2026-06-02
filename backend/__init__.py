@@ -7,4 +7,4 @@ surfaces — FastAPI app metadata, /api/v1/system/version, the SPA
 footer — read it from here.
 """
 
-__version__ = "2026.06.01.0"
+__version__ = "2026.06.02.0"
