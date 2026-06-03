@@ -179,6 +179,14 @@ GMAIL_ALL_MAIL = "[Gmail]/All Mail"
 GMAIL_TRASH = "[Gmail]/Trash"
 
 
+def _imap_quote(mailbox: str) -> str:
+    """Wrap a mailbox name as an IMAP quoted-string. Required for names with
+    spaces like "[Gmail]/All Mail" — imaplib does not quote them, so the bare
+    space breaks SELECT/EXAMINE/COPY ("Could not parse command"). Safe for
+    simple names (INBOX) too."""
+    return '"' + mailbox.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _sync_search_senders_before(
     email_addr: str,
     app_password: str,
@@ -192,7 +200,7 @@ def _sync_search_senders_before(
     results: list[dict] = []
     with imaplib.IMAP4_SSL(_GMAIL_IMAP_HOST, _GMAIL_IMAP_PORT, timeout=_LOGIN_TIMEOUT_SECONDS) as m:
         m.login(email_addr, pw)
-        status, _ = m.select(mailbox, readonly=True)
+        status, _ = m.select(_imap_quote(mailbox), readonly=True)
         if status != "OK":
             raise RuntimeError(f"IMAP SELECT {mailbox!r} failed: {status}")
         # FROM matches a substring of the From header; BEFORE is date-only and
@@ -261,12 +269,12 @@ def _sync_trash_messages(
     trashed = 0
     with imaplib.IMAP4_SSL(_GMAIL_IMAP_HOST, _GMAIL_IMAP_PORT, timeout=_LOGIN_TIMEOUT_SECONDS) as m:
         m.login(email_addr, pw)
-        status, _ = m.select(source_mailbox)  # writable
+        status, _ = m.select(_imap_quote(source_mailbox))  # writable
         if status != "OK":
             raise RuntimeError(f"IMAP SELECT {source_mailbox!r} failed: {status}")
         for uid in uids:
             uid_b = uid.encode("ascii") if isinstance(uid, str) else uid
-            cs, _ = m.uid("copy", uid_b, GMAIL_TRASH)
+            cs, _ = m.uid("copy", uid_b, _imap_quote(GMAIL_TRASH))
             if cs != "OK":
                 log.warning("imap_trash_copy_failed", uid=uid, status=cs)
                 continue
