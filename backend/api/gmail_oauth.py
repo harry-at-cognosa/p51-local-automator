@@ -21,6 +21,18 @@ the OAuth-start endpoint returns 503 with a helpful message until they are.
 """
 from __future__ import annotations
 
+import os
+
+# Google sometimes returns a scope set that is a *superset* of what we
+# requested — typically because the user's Google account already has cached
+# consent for additional scopes from a prior OAuth session (e.g. gmail.modify
+# from an older client, even though we now only ask for gmail.readonly /
+# compose / send / calendar.readonly). oauthlib's default behavior is strict
+# match and raises "Scope has changed" at token exchange, breaking the connect
+# flow even after the user revokes and retries. Google's docs endorse relaxing
+# the check when the granted set is a superset of the requested set.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
 from datetime import datetime, timedelta, timezone
 import secrets as stdlib_secrets
 from urllib.parse import urlencode
