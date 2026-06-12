@@ -273,20 +273,44 @@ def _find_synonym_group(title_lower: str, groups: list[list[str]]) -> int | None
 
 
 def _parse_event_datetime(raw: str) -> datetime | None:
-    """Accept ISO 8601 (with optional 'Z') or the upstream's local string.
+    """Accept ISO 8601 (Google Calendar) OR Apple Calendar MCP's
+    natural-language strings like 'Thursday, 4 June 2026 at 8:00:00 am'.
 
     Returns a naive local datetime (drops tz) for consistent grid placement.
+    Returns None if the string can't be parsed by any known format.
     """
     if not raw:
         return None
-    try:
-        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
+    s = str(raw).strip()
+    if not s:
         return None
-    if dt.tzinfo is not None:
-        # Convert to local naive — the grid uses local hours.
-        dt = dt.astimezone().replace(tzinfo=None)
-    return dt
+
+    # 1) ISO 8601 (Google + anything well-formed)
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        pass
+
+    # 2) Apple Calendar MCP locale-formatted strings. Normalize am/pm to
+    #    AM/PM since strptime's %p is locale-dependent.
+    normalized = s.replace(" am", " AM").replace(" pm", " PM")
+    formats = [
+        "%A, %d %B %Y at %I:%M:%S %p",   # Thursday, 4 June 2026 at 8:00:00 AM
+        "%A, %B %d, %Y at %I:%M:%S %p",  # Thursday, June 4, 2026 at 8:00:00 AM
+        "%A, %d %B %Y at %I:%M %p",      # without seconds
+        "%A, %B %d, %Y at %I:%M %p",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+
+    log.warning("calendar_context_digest_unparseable_date", raw=s[:120])
+    return None
 
 
 def _curate_events(
