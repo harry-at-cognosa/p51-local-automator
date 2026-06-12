@@ -215,6 +215,18 @@ export default function WorkflowConfigForm({
     );
   }
 
+  // Calendar Digest with Context (type 9) — hand-tuned form: calendar
+  // picker reused from Type 3 + days (max 7) + context textarea +
+  // reminder_patterns textarea + synonym_groups editor. Emailable.
+  if (typeId === 9) {
+    return (
+      <>
+        <Type9CalendarContextDigestForm config={config} onChange={onChange} set={set} />
+        {emailSection}
+      </>
+    );
+  }
+
   // SQL Query Runner — wraps the return so the email section can append
   // below the existing inline JSX.
   const wrapWithEmail = (node: React.ReactNode) => (
@@ -1425,6 +1437,284 @@ function Type3CalendarDigestForm({ config, onChange, set }: Type3Props) {
           </Col>
         </>
       )}
+    </Row>
+  );
+}
+
+
+// ── Type 9 Calendar Digest with Context ─────────────────────────────
+// Reuses Type 3's calendar/account picker pattern (copy-and-adapt rather
+// than shared component, to keep Type 3 untouched), and adds three new
+// fields: context_text, reminder_patterns, synonym_groups.
+
+function Type9CalendarContextDigestForm({ config, onChange, set }: Type3Props) {
+  const service = (config.service as string) || "apple_calendar";
+
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [gmailError, setGmailError] = useState<string | null>(null);
+
+  const [calendars, setCalendars] = useState<GoogleCalendarOption[]>([]);
+  const [calendarsLoading, setCalendarsLoading] = useState(false);
+  const [calendarsError, setCalendarsError] = useState<string | null>(null);
+
+  const accountId = config.account_id as number | undefined;
+
+  useEffect(() => {
+    if (service !== "google_calendar") return;
+    setGmailLoading(true);
+    setGmailError(null);
+    axiosClient
+      .get<GmailAccountOption[]>("/gmail/accounts")
+      .then((res) => setGmailAccounts(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setGmailError(err?.response?.data?.detail || err?.message || "Failed to load Google accounts.");
+      })
+      .finally(() => setGmailLoading(false));
+  }, [service]);
+
+  useEffect(() => {
+    if (service !== "google_calendar" || !accountId) {
+      setCalendars([]);
+      return;
+    }
+    setCalendarsLoading(true);
+    setCalendarsError(null);
+    axiosClient
+      .get<GoogleCalendarOption[]>(`/google-calendar/calendars?account_id=${accountId}`)
+      .then((res) => setCalendars(res.data))
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        setCalendarsError(err?.response?.data?.detail || err?.message || "Failed to load calendars.");
+      })
+      .finally(() => setCalendarsLoading(false));
+  }, [service, accountId]);
+
+  const handleServiceChange = (newService: string) => {
+    const next: Record<string, unknown> = { ...config, service: newService };
+    delete next.calendars;
+    delete next.calendar_ids;
+    delete next.account_id;
+    onChange(next);
+  };
+
+  const activeGmailAccounts = gmailAccounts.filter((a) => a.status === "active");
+  const selectedAppleCals = (config.calendars as string[]) || ["Work", "Family"];
+  const selectedGoogleCalIds = (config.calendar_ids as string[]) || [];
+
+  // List-field local text state so the user can type freely (preserving
+  // blank lines, trailing newlines) before we parse + commit to config.
+  const initialReminderText = ((config.reminder_patterns as string[]) || []).join("\n");
+  const initialSynonymText = ((config.synonym_groups as string[][]) || [])
+    .map((g) => g.join(", "))
+    .join("\n");
+  const [reminderText, setReminderText] = useState<string>(initialReminderText);
+  const [synonymText, setSynonymText] = useState<string>(initialSynonymText);
+
+  const commitReminderPatterns = (text: string) => {
+    const list = text
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    set("reminder_patterns", list);
+  };
+
+  const commitSynonymGroups = (text: string) => {
+    const groups = text
+      .split("\n")
+      .map((line) =>
+        line
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      )
+      .filter((g) => g.length > 0);
+    set("synonym_groups", groups);
+  };
+
+  return (
+    <Row className="g-3">
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Calendar Service</Form.Label>
+          <Form.Select
+            value={service}
+            onChange={(e) => handleServiceChange(e.target.value)}
+          >
+            <option value="apple_calendar">Apple Calendar</option>
+            <option value="google_calendar">Google Calendar (Workspace)</option>
+          </Form.Select>
+        </Form.Group>
+      </Col>
+      <Col md={6}>
+        <Form.Group>
+          <Form.Label>Days Ahead</Form.Label>
+          <Form.Control
+            type="number"
+            min={1}
+            max={7}
+            value={(config.days as number) || 7}
+            onChange={(e) => set("days", Number(e.target.value))}
+          />
+          <Form.Text className="text-muted">
+            Maximum 7 days — the visual time grid renders one column per day.
+          </Form.Text>
+        </Form.Group>
+      </Col>
+
+      {service === "apple_calendar" ? (
+        <Col md={12}>
+          <Form.Group>
+            <Form.Label>Calendars</Form.Label>
+            {CALENDAR_OPTIONS.map((cal) => (
+              <Form.Check
+                key={cal}
+                type="checkbox"
+                label={cal}
+                checked={selectedAppleCals.includes(cal)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    set("calendars", [...selectedAppleCals, cal]);
+                  } else {
+                    set("calendars", selectedAppleCals.filter((c) => c !== cal));
+                  }
+                }}
+              />
+            ))}
+            <Form.Text className="text-muted">
+              The first checked calendar wins for synonym-collapsed duplicates.
+            </Form.Text>
+          </Form.Group>
+        </Col>
+      ) : (
+        <>
+          <Col md={6}>
+            <Form.Group>
+              <Form.Label>Google Account</Form.Label>
+              <Form.Select
+                value={accountId ?? ""}
+                onChange={(e) => set("account_id", e.target.value ? Number(e.target.value) : null)}
+                disabled={gmailLoading || activeGmailAccounts.length === 0}
+              >
+                <option value="">— select an account —</option>
+                {activeGmailAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.email}</option>
+                ))}
+              </Form.Select>
+              {gmailLoading && <Form.Text className="text-muted">Loading accounts…</Form.Text>}
+              {gmailError && <Form.Text className="text-danger">{gmailError}</Form.Text>}
+              {!gmailLoading && !gmailError && activeGmailAccounts.length === 0 && (
+                <Form.Text className="text-muted">
+                  No active Google accounts. Connect one at <code>/app/connections</code>.
+                </Form.Text>
+              )}
+            </Form.Group>
+          </Col>
+          <Col md={12}>
+            <Form.Group>
+              <Form.Label>Calendars</Form.Label>
+              {!accountId && <Form.Text className="text-muted d-block">Select an account above first.</Form.Text>}
+              {accountId !== undefined && calendarsLoading && (
+                <Form.Text className="text-muted d-block">Loading calendars…</Form.Text>
+              )}
+              {calendarsError && (
+                <Form.Text className="text-danger d-block">{calendarsError}</Form.Text>
+              )}
+              {accountId !== undefined && !calendarsLoading && !calendarsError && calendars.length === 0 && (
+                <Form.Text className="text-muted d-block">No calendars found.</Form.Text>
+              )}
+              {calendars.map((cal) => (
+                <Form.Check
+                  key={cal.id}
+                  type="checkbox"
+                  label={
+                    <>
+                      {cal.summary}
+                      {cal.primary && <Badge bg="secondary" className="ms-2">primary</Badge>}
+                    </>
+                  }
+                  checked={selectedGoogleCalIds.includes(cal.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      set("calendar_ids", [...selectedGoogleCalIds, cal.id]);
+                    } else {
+                      set("calendar_ids", selectedGoogleCalIds.filter((c) => c !== cal.id));
+                    }
+                  }}
+                />
+              ))}
+            </Form.Group>
+          </Col>
+        </>
+      )}
+
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Context</Form.Label>
+          <Form.Control
+            as="textarea"
+            rows={6}
+            placeholder={
+              "Describe this digest's job. Who is it for? What context should the AI know? Examples:\n" +
+              "• \"My home digest. Children are 9 and 12; ignore school holidays.\"\n" +
+              "• \"Work week. I'm pre-revenue; treat investor meetings as high priority.\""
+            }
+            value={(config.context_text as string) || ""}
+            onChange={(e) => set("context_text", e.target.value)}
+          />
+          <Form.Text className="text-muted">
+            Read by the AI when writing the one-paragraph summary at the top
+            of the digest. Importance and conflicts are not AI-guessed — those
+            come from event-title markers (<code>*Important*</code>,{" "}
+            <code>|tentative|</code>) and from the visual time grid.
+          </Form.Text>
+        </Form.Group>
+      </Col>
+
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Reminder Patterns</Form.Label>
+          <Form.Control
+            as="textarea"
+            rows={4}
+            placeholder={"One per line. Examples:\nTirzep\nRepatha shot"}
+            value={reminderText}
+            onChange={(e) => setReminderText(e.target.value)}
+            onBlur={() => commitReminderPatterns(reminderText)}
+            style={{ fontFamily: "monospace", fontSize: "0.9em" }}
+          />
+          <Form.Text className="text-muted">
+            Events whose titles contain any of these substrings (case-insensitive)
+            are treated as point-in-time reminders. They appear as thin marks in
+            the grid and are excluded from the AI summary's conflict reasoning.
+          </Form.Text>
+        </Form.Group>
+      </Col>
+
+      <Col md={12}>
+        <Form.Group>
+          <Form.Label>Synonym Groups</Form.Label>
+          <Form.Control
+            as="textarea"
+            rows={4}
+            placeholder={
+              "One group per line, comma-separated. Examples:\n" +
+              "Trader Joes, TJ, TJ's\n" +
+              "meet doug, Doug 1:1, Doug sync"
+            }
+            value={synonymText}
+            onChange={(e) => setSynonymText(e.target.value)}
+            onBlur={() => commitSynonymGroups(synonymText)}
+            style={{ fontFamily: "monospace", fontSize: "0.9em" }}
+          />
+          <Form.Text className="text-muted">
+            Events across calendars whose titles contain any phrase from the
+            same group on the same day are treated as one event. The first
+            checked calendar wins; others are tagged "also on …".
+          </Form.Text>
+        </Form.Group>
+      </Col>
     </Row>
   );
 }

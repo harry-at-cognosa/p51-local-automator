@@ -105,6 +105,12 @@ ARTIFACT_KINDS_BY_TYPE: dict[int, dict[str, str]] = {
         "reaper_report_csv": r"^email_reaper_report\.csv$",
         "reaper_report_md": r"^email_reaper_report\.md$",
     },
+    # Type 9 — Calendar Digest with Context. Markdown digest, JSON, time-grid PNG.
+    9: {
+        "digest_md": r"^calendar_digest\.md$",
+        "digest_json": r"^calendar_digest\.json$",
+        "digest_png": r"^calendar_digest\.png$",
+    },
 }
 
 
@@ -126,6 +132,7 @@ ARTIFACT_KIND_LABELS: dict[str, str] = {
     "report_md": "Analyst report (Markdown)",
     "reaper_report_csv": "Deletion report (CSV)",
     "reaper_report_md": "Deletion report (Markdown)",
+    "digest_png": "Calendar grid (PNG)",
 }
 
 

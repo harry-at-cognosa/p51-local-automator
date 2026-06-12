@@ -75,6 +75,42 @@ def judge_structured(
     return {"result": result, "usage": usage}
 
 
+def complete_text(
+    system: str,
+    user_prompt: str,
+    model: str = "claude-sonnet-4-20250514",
+    max_tokens: int = 1024,
+) -> dict:
+    """Plain-text LLM completion (no JSON forcing). Returns {"text": str, "usage": {...}}.
+
+    Use when the caller wants a single string back — a summary paragraph, a
+    short explanation, etc. — and JSON structure would be overkill. Differs
+    from `judge_structured` only in that the response is returned verbatim
+    rather than parsed.
+    """
+    client = get_client()
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=[{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }],
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    text = response.content[0].text.strip()
+    usage = {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
+    }
+    return {"text": text, "usage": usage}
+
+
 def categorize_emails(emails: list[dict], topics: list[str], scope: str = "") -> dict:
     """Categorize a batch of emails by topic and urgency.
 

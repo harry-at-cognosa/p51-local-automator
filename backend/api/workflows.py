@@ -43,6 +43,7 @@ from backend.services import gmail_client, mcp_client
 from backend.services import secrets as crypto
 from backend.services.logger_service import get_logger
 from backend.services.workflows.calendar_digest import run_calendar_digest
+from backend.services.workflows.calendar_context_digest import run_calendar_context_digest
 from backend.services.workflows.analyze_data_collection import run_analyze_data_collection
 from backend.services.workflows.data_analyzer import run_data_analyzer
 from backend.services.workflows.email_auto_reply_approve import run_email_auto_reply_approve
@@ -804,6 +805,7 @@ WORKFLOW_RUNNERS = {
     6: run_email_auto_reply_approve,
     7: run_analyze_data_collection,
     8: run_email_reaper,
+    9: run_calendar_context_digest,
 }
 
 
