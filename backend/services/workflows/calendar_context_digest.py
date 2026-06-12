@@ -295,16 +295,22 @@ def _curate_events(
     reminder_patterns: list[str],
     synonym_groups: list[list[str]],
 ) -> list[CuratedEvent]:
-    """Parse markers, classify reminders, collapse synonym matches.
+    """Parse markers, classify reminders, collapse synonym + exact-title matches.
 
-    Synonym collapse semantics:
-      - Group key = (date, synonym_group_index). One winner per key.
-      - Winner = the calendar earliest in `calendars_order`. Calendars
-        not in the order list sort after listed ones, by name.
-      - Reminder wins over non-reminder in the same group (a reminder
-        anywhere in the group makes the whole group a reminder).
+    Collapse semantics (applied first to synonym matches, then to exact-title
+    matches across calendars on the same day):
+      - Winner = the calendar earliest in `calendars_order`. Calendars not
+        in the order list sort after listed ones, by name.
+      - Reminder propagates from any member.
       - Importance + tentative = OR across the group.
       - Time span = (earliest start, latest end).
+      - also_on accumulates non-winner calendars + each member's existing
+        also_on list, deduped.
+
+    Exact-title matching uses case-insensitive equality after marker
+    stripping and whitespace trimming. Two events titled "Doctor's
+    appointment" on the same day in different calendars collapse without
+    needing an explicit synonym_groups entry.
     """
     cal_rank = {c: i for i, c in enumerate(calendars_order)}
 
@@ -333,53 +339,96 @@ def _curate_events(
             also_on=[],
         ))
 
-    if not synonym_groups:
-        return parsed
+    # Pass 1: synonym-group collapse (skipped if no groups configured).
+    after_synonym = _collapse_pass(
+        parsed,
+        bucket_key=lambda e: _synonym_bucket_key(e, synonym_groups),
+        cal_key=_cal_key,
+    )
 
-    # Bucket by (date, group_index). Pass-through bucket for unmatched events
-    # uses key (date, None, original_index) so they don't collide.
-    buckets: dict[tuple, list[CuratedEvent]] = {}
+    # Pass 2: exact-title collapse on the synonym-pass output. Always on —
+    # catches the common case of an identical event mirrored across two
+    # calendars where a user just wants one entry.
+    after_exact = _collapse_pass(
+        after_synonym,
+        bucket_key=lambda e: (e.start_dt.date(), "title:" + e.title.strip().lower()),
+        cal_key=_cal_key,
+    )
+
+    return after_exact
+
+
+def _synonym_bucket_key(ev: CuratedEvent, groups: list[list[str]]) -> tuple | None:
+    """Bucket key for the synonym pass; None means "no synonym match — pass through"."""
+    if not groups:
+        return None
+    gi = _find_synonym_group(ev.title.lower(), groups)
+    if gi is None:
+        return None
+    return (ev.start_dt.date(), "syn:" + str(gi))
+
+
+def _collapse_pass(
+    events: list[CuratedEvent],
+    bucket_key,
+    cal_key,
+) -> list[CuratedEvent]:
+    """Generic single-pass collapse.
+
+    `bucket_key(event)` returns a hashable key or None. Events that key to
+    None pass through unchanged. Buckets with one member pass through
+    unchanged. Buckets with multiple members merge into one CuratedEvent
+    via the collapse semantics documented on `_curate_events`.
+    """
+    buckets: dict = {}
     passthrough: list[CuratedEvent] = []
-    for ev in parsed:
-        gi = _find_synonym_group(ev.title.lower(), synonym_groups)
-        if gi is None:
+    for ev in events:
+        key = bucket_key(ev)
+        if key is None:
             passthrough.append(ev)
             continue
-        key = (ev.start_dt.date(), gi)
         buckets.setdefault(key, []).append(ev)
 
-    collapsed: list[CuratedEvent] = []
-    for _key, members in buckets.items():
+    out: list[CuratedEvent] = []
+    for members in buckets.values():
         if len(members) == 1:
-            collapsed.append(members[0])
+            out.append(members[0])
             continue
-        members_sorted = sorted(members, key=lambda e: _cal_key(e.calendar))
-        winner = members_sorted[0]
-        others = members_sorted[1:]
-        also_on = [m.calendar for m in others if m.calendar and m.calendar != winner.calendar]
-        # Reminder propagates from any member.
-        is_reminder = any(m.is_reminder for m in members_sorted)
-        # Importance: any member important → important.
-        importance = "important" if any(m.importance == "important" for m in members_sorted) else "normal"
-        tentative = any(m.tentative for m in members_sorted)
-        # Time span: union.
-        starts = [m.start_dt for m in members_sorted]
-        ends = [m.end_dt for m in members_sorted if m.end_dt is not None]
-        start = min(starts)
-        end = max(ends) if ends else None
-        collapsed.append(CuratedEvent(
-            start_dt=start,
-            end_dt=end,
-            title=winner.title,
-            calendar=winner.calendar,
-            location=winner.location,
-            importance=importance,
-            tentative=tentative,
-            is_reminder=is_reminder,
-            also_on=also_on,
-        ))
+        out.append(_merge_members(members, cal_key))
+    return passthrough + out
 
-    return passthrough + collapsed
+
+def _merge_members(members: list[CuratedEvent], cal_key) -> CuratedEvent:
+    """Merge a bucket of >=2 events into a single CuratedEvent."""
+    members_sorted = sorted(members, key=lambda e: cal_key(e.calendar))
+    winner = members_sorted[0]
+    others = members_sorted[1:]
+
+    # Accumulate also_on: winner's existing also_on + each other's calendar
+    # + each other's existing also_on, deduped and excluding the winner's
+    # own calendar.
+    also_on: list[str] = list(winner.also_on)
+    for m in others:
+        for cand in (m.calendar, *m.also_on):
+            if cand and cand != winner.calendar and cand not in also_on:
+                also_on.append(cand)
+
+    is_reminder = any(m.is_reminder for m in members_sorted)
+    importance = "important" if any(m.importance == "important" for m in members_sorted) else "normal"
+    tentative = any(m.tentative for m in members_sorted)
+    starts = [m.start_dt for m in members_sorted]
+    ends = [m.end_dt for m in members_sorted if m.end_dt is not None]
+    return CuratedEvent(
+        start_dt=min(starts),
+        end_dt=max(ends) if ends else None,
+        title=winner.title,
+        calendar=winner.calendar,
+        location=winner.location,
+        importance=importance,
+        tentative=tentative,
+        is_reminder=is_reminder,
+        also_on=also_on,
+    )
 
 
 def _to_grid_event(c: CuratedEvent) -> GridEvent:
