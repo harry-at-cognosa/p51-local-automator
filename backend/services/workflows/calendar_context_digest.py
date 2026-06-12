@@ -133,7 +133,11 @@ async def run_calendar_context_digest(
         )
         attribution = _png_attribution(workflow, run, png_meta)
         grid_events = [_to_grid_event(c) for c in curated]
-        render_grid(grid_events, start_date, days, png_path, attribution_text=attribution)
+        render_grid(
+            grid_events, start_date, days, png_path,
+            attribution_text=attribution,
+            calendars_order=calendars_list,
+        )
         await engine.record_artifact(
             session, run.run_id, step2.step_id, png_path, "png",
             "Visual 7-day time grid",
