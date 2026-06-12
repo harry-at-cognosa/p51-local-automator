@@ -23,6 +23,7 @@ Bottom panel — the legend:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Sequence
@@ -306,7 +307,7 @@ def _draw_event(
             color=edge_color, lw=2.5, solid_capstyle="round", zorder=3,
         )
         ax.text(
-            x_center + 0.04, y_start_clip + 0.15, str(render_id),
+            x_center + 0.04, y_start_clip + 0.15, _badge_label(render_id, ev),
             fontsize=7, color=edge_color, fontweight="bold",
             va="top", ha="left", zorder=4,
         )
@@ -331,10 +332,11 @@ def _draw_event(
         facecolor=face, edgecolor=edge, linewidth=lw, linestyle=linestyle, zorder=2,
     ))
 
-    # Number badge in the top-left of the box, sized down a hair when packed.
+    # Number badge + short prefix in the top-left of the box, sized down a
+    # hair when packed.
     badge_fs = 9 if n_cols == 1 else max(7, 9 - (n_cols - 1))
     ax.text(
-        x_left + 0.03, y_start_clip + 0.08, str(render_id),
+        x_left + 0.03, y_start_clip + 0.08, _badge_label(render_id, ev),
         fontsize=badge_fs, color=text_color, fontweight="bold",
         va="top", ha="left", zorder=4,
     )
@@ -458,6 +460,31 @@ def _format_when(ev: GridEvent) -> str:
         end_str = ev.end_dt.strftime("%H:%M")
         return f"{date_str}  {start_str}–{end_str}"
     return f"{date_str}  {start_str}"
+
+
+_WORD_RE = re.compile(r"[\w']+")
+_PREFIX_MAX = 8
+
+
+def _short_prefix(title: str) -> str:
+    """First word of `title` (stops at whitespace or punctuation), max 8 chars.
+
+    Used for the in-box hint after the badge number. Users tune their event
+    titles so the first word is the meaningful code (e.g. "Coffee with X" →
+    "Coffee", "Clint/Dan/Harry" → "Clint").
+    """
+    if not title:
+        return ""
+    m = _WORD_RE.match(title.strip())
+    if not m:
+        return title.strip()[:_PREFIX_MAX]
+    return m.group(0)[:_PREFIX_MAX]
+
+
+def _badge_label(render_id: int, ev: GridEvent) -> str:
+    """'<n> - <prefix>' or just '<n>' if title has no word characters."""
+    prefix = _short_prefix(ev.title)
+    return f"{render_id} - {prefix}" if prefix else str(render_id)
 
 
 def _dt_to_y(dt: datetime) -> float:
