@@ -1,6 +1,6 @@
 # p51-local-automator
 
-A Mac-based automation platform for small businesses (<15 users). Employees configure and run AI-powered workflows — email monitoring, data analysis, calendar digests, report generation — through a web interface. All processing runs locally except LLM API calls.
+A Mac-based automation platform for individuals and small businesses (<15 users). Employees configure and run AI-powered workflows — email monitoring, data analysis, calendar digests, report generation — through a web interface. All processing runs locally except LLM API calls. The initial version (summer 2026) supports multiple users with calendars and email in a common Google workspace, while for an individual installing on their own desktop, Apple mail and calendar accounts (be they for Apple, Google or Microsoft services) are also supported.
 
 ## Why "local"?
 
@@ -14,7 +14,7 @@ No cloud proxies, no third-party middleware. The platform connects directly to A
 | Frontend | React 19, TypeScript, Vite, Bootstrap 5, Zustand |
 | Auth | fastapi-users + JWT (7-day tokens) |
 | LLM | Anthropic Claude API (direct SDK, prompt caching) |
-| Services | Local MCP servers — Apple Mail, Apple Calendar (Google Workspace planned) |
+| Services | Local MCP servers — Apple Mail, Apple Calendar, and Google Workspace services |
 | Scheduling | APScheduler (in-process) |
 | Migrations | Alembic |
 
@@ -27,7 +27,7 @@ No cloud proxies, no third-party middleware. The platform connects directly to A
 
 ## Requirements
 
-- macOS (tested on macOS 15 / Sequoia)
+- macOS (tested on macOS 26 / Tahoe)
 - Python 3.12+
 - Node.js — pinned to the version in `frontend/.nvmrc` (currently **25.4.0**); manage with [`nvm`](https://github.com/nvm-sh/nvm) so multiple machines produce identical `package-lock.json` files
 - PostgreSQL 14+
