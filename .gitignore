@@ -11,6 +11,7 @@ frontend/dist/
 backend/static/
 data/
 logs/
+.claude/
 .pytest_cache/
 .mypy_cache/
 *.xlsx

@@ -1,5 +1,4 @@
-# p51-local-automator — Refresh Process After `git pull`
-
+# p51_refresh_process__after_git pull__260512.md
 **Last updated:** 2026-05-12
 **Repo root:** `~/p51-local-automator` (resolves to your home dir on whichever machine)
 **Venv:** `~/p51-local-automator/venv`
