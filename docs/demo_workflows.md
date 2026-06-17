@@ -51,8 +51,9 @@ Log in at `http://localhost:8000/app` as `demo_user` /
 ## The five workflows
 
 Each row below corresponds to one entry on the Workflows page. Runtimes
-and token figures are from real runs on a Mac Mini against
-`claude-opus-4-7` (your mileage will vary by a small factor).
+and token figures are from real runs on a Mac Mini with the
+`default_reasoning_model` setting at its current default (your mileage
+will vary by a small factor).
 
 ### 1. UCI Online Retail II — UK e-commerce transactions (Type 2)
 

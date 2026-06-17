@@ -144,7 +144,12 @@ async def run_calendar_context_digest(
         )
 
         # LLM summary paragraph — narrow scope, primed by context_text.
-        summary_text, llm_tokens = _llm_summary(curated, context_text, days, start_date)
+        fast_model = await engine.resolve_default_fast_model(
+            session, workflow.group_id, config=workflow.config
+        )
+        summary_text, llm_tokens = _llm_summary(
+            curated, context_text, days, start_date, model=fast_model
+        )
 
         # Markdown
         md_path = os.path.join(output_dir, "calendar_digest.md")
@@ -494,8 +499,13 @@ def _llm_summary(
     context_text: str,
     days: int,
     start_date,
+    model: str | None = None,
 ) -> tuple[str, int]:
-    """Single short paragraph. No tags, no conflict list, no per-event notes."""
+    """Single short paragraph. No tags, no conflict list, no per-event notes.
+
+    `model` is forwarded to llm_service.complete_text; None falls back to
+    that helper's settings-chain default.
+    """
     if not curated:
         return ("No events scheduled in this window.", 0)
 
@@ -551,7 +561,7 @@ def _llm_summary(
     )
 
     try:
-        result = llm_service.complete_text(system, user_prompt, max_tokens=512)
+        result = llm_service.complete_text(system, user_prompt, max_tokens=512, model=model)
     except Exception as exc:
         log.warning("calendar_context_digest_llm_error", error=str(exc)[:300])
         return ("(Summary unavailable — LLM call failed.)", 0)

@@ -48,6 +48,17 @@ SETTING_STEP_SUMMARY_TRUNCATE_CHARS   = "step_summary_truncate_chars"   # Type 7
 SETTING_REAPER_MAX_SENDERS            = "reaper_max_senders"            # Type 8 — max sender rows
 SETTING_REAPER_FETCH_LIMIT_PER_SENDER = "reaper_fetch_limit_per_sender" # Type 8 — max msgs scanned per sender per run
 
+# Anthropic model IDs — resolved via resolve_str_setting() with the same
+# 3-layer chain (workflow.config → group_settings → api_settings → code
+# fallback). The FALLBACK constants below are the runner-local last-resort
+# values used when no row exists in api_settings (e.g. before the seed
+# migration runs on a fresh install).
+SETTING_DEFAULT_FAST_MODEL      = "default_fast_model"      # llm_service.judge_structured / complete_text callers
+SETTING_DEFAULT_REASONING_MODEL = "default_reasoning_model" # AgenticEngine analyze loop, synthesize, scribe
+
+DEFAULT_FAST_MODEL_FALLBACK      = "claude-sonnet-4-6"
+DEFAULT_REASONING_MODEL_FALLBACK = "claude-opus-4-8"
+
 # Absolute ceilings — operator cannot exceed via api_settings. Hardcoded
 # runaway-cost guards. Bump only by editing source.
 ABS_MAX_AGENT_TURNS = 100
@@ -99,6 +110,85 @@ async def resolve_int_setting(
         return int(global_value.strip())
 
     return None
+
+
+async def resolve_str_setting(
+    session: AsyncSession,
+    group_id: int,
+    name: str,
+    user_override: str | None = None,
+    default: str | None = None,
+) -> str | None:
+    """Three-tier resolution for a string setting.
+
+    Order: user-supplied override (e.g. workflow.config['<name>']) →
+    group_settings row → api_settings row → `default`.
+
+    Empty / whitespace-only values at any tier are treated as not-set so
+    a misconfigured blank row falls through to the next tier rather than
+    producing an empty string. Use this for free-form strings like model
+    IDs, identifiers, or paths.
+    """
+    if isinstance(user_override, str) and user_override.strip():
+        return user_override.strip()
+
+    group_value = await session.scalar(
+        select(GroupSettings.value).where(
+            GroupSettings.group_id == group_id,
+            GroupSettings.name == name,
+        )
+    )
+    if group_value and group_value.strip():
+        return group_value.strip()
+
+    global_value = await session.scalar(
+        select(ApiSettings.value).where(ApiSettings.name == name)
+    )
+    if global_value and global_value.strip():
+        return global_value.strip()
+
+    return default
+
+
+async def resolve_default_fast_model(
+    session: AsyncSession,
+    group_id: int,
+    *,
+    config: dict | None = None,
+) -> str:
+    """Resolve the model ID for llm_service.judge_structured / complete_text
+    callers. Wraps resolve_str_setting with the SETTING key, the
+    workflow.config user-override lookup, and the code-level fallback all
+    pre-wired so each caller is a single line:
+
+        fast_model = await resolve_default_fast_model(
+            session, workflow.group_id, config=workflow.config
+        )
+    """
+    return await resolve_str_setting(
+        session,
+        group_id,
+        SETTING_DEFAULT_FAST_MODEL,
+        user_override=(config or {}).get("default_fast_model"),
+        default=DEFAULT_FAST_MODEL_FALLBACK,
+    ) or DEFAULT_FAST_MODEL_FALLBACK
+
+
+async def resolve_default_reasoning_model(
+    session: AsyncSession,
+    group_id: int,
+    *,
+    config: dict | None = None,
+) -> str:
+    """Resolve the model ID for the AgenticEngine (Type 7). Mirrors
+    resolve_default_fast_model but for the Opus-tier reasoning model."""
+    return await resolve_str_setting(
+        session,
+        group_id,
+        SETTING_DEFAULT_REASONING_MODEL,
+        user_override=(config or {}).get("default_reasoning_model"),
+        default=DEFAULT_REASONING_MODEL_FALLBACK,
+    ) or DEFAULT_REASONING_MODEL_FALLBACK
 
 
 async def _resolve_file_system_root(session: AsyncSession, group_id: int) -> str:

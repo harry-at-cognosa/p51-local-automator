@@ -137,7 +137,8 @@ sequenced as:
    binary). Recommend pdfplumber for v1 — install simplicity matters
    on Mac Mini.
 2. **`max_chars_per_file` budget.** 8k per doc × 200 docs = 1.6M
-   chars. That comfortably fits in `claude-opus-4-7`'s 1M context only
+   chars. That comfortably fits in the Opus reasoning model's 1M context
+   (the active model is the `default_reasoning_model` setting) only
    if the engine plays games with caching/retrieval. Recommend
    lazy-loading: the corpus index lists doc names + first 500 chars;
    full text loads only when the LLM calls `corpus_search`.

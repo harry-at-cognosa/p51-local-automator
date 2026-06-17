@@ -41,9 +41,6 @@ log = get_logger("agentic_engine")
 
 _SUMMARY_MAX_CHARS = 2000
 
-# Anthropic model defaults. Opus for reasoning-heavy stages.
-DEFAULT_REASONING_MODEL = "claude-opus-4-8"
-
 # Stage-tool mapping. analyze gets the read-write computation surface;
 # audit (A4) will get the read-only inspection surface; data_io is never
 # exposed to the LLM (loaders run deterministically in ingest).
@@ -226,11 +223,22 @@ class AgenticEngine:
         audit_max_agent_turns: int = 12,
         llm_max_tokens: int = 4096,
         step_summary_truncate_chars: int = _SUMMARY_MAX_CHARS,
+        reasoning_model: str | None = None,
     ):
         self.session = session
         self.run = run
         self.workflow = workflow
         self.ctx = ctx
+        # Anthropic model ID for the reasoning-heavy stages (analyze loop,
+        # synthesize, scribe). None falls back to the workflow_engine
+        # FALLBACK constant so existing direct callers keep working; the
+        # AWF-1 runner in analyze_data_collection.py resolves the live
+        # value from settings via resolve_default_reasoning_model() and
+        # passes it here, letting operators edit the model in admin UI.
+        if reasoning_model is None:
+            from backend.services.workflow_engine import DEFAULT_REASONING_MODEL_FALLBACK
+            reasoning_model = DEFAULT_REASONING_MODEL_FALLBACK
+        self.reasoning_model = reasoning_model
         # Absolute path to the user's inputs sandbox; data_definition file
         # paths are relative to this. Resolved by the runner before
         # constructing the engine so the engine doesn't need DB access for
@@ -576,7 +584,7 @@ class AgenticEngine:
         user_prompt: str,
         tool_names: tuple[str, ...],
         cached_context: str | None = None,
-        model: str = DEFAULT_REASONING_MODEL,
+        model: str | None = None,
         max_tokens: int = 4096,
         max_turns: int = MAX_AGENT_TURNS,
     ) -> tuple[str, int]:
@@ -598,6 +606,10 @@ class AgenticEngine:
         from backend.services.llm_service import get_client  # lazy
         from backend.services.skills import to_anthropic_tools
 
+        # Default the model to the engine's resolved reasoning model so
+        # admin-settings overrides reach the analyze loop without each
+        # call site repeating self.reasoning_model.
+        model = model or self.reasoning_model
         client = get_client()
         tools = to_anthropic_tools(names=list(tool_names))
         # Cache the tool definitions: cache_control on the last tool tells
@@ -813,7 +825,7 @@ class AgenticEngine:
             # Manually issued so we can write a single llm_turn row for this
             # stage rather than using _run_agent_loop (no tools here).
             response = client.messages.create(
-                model=DEFAULT_REASONING_MODEL,
+                model=self.reasoning_model,
                 max_tokens=self.llm_max_tokens,
                 system=[{
                     "type": "text",
@@ -1016,7 +1028,7 @@ class AgenticEngine:
 
             client = get_client()
             response = client.messages.create(
-                model=DEFAULT_REASONING_MODEL,
+                model=self.reasoning_model,
                 max_tokens=self.llm_max_tokens,
                 system=[{
                     "type": "text",

@@ -119,6 +119,9 @@ async def run_analyze_data_collection(
         name=engine.SETTING_STEP_SUMMARY_TRUNCATE_CHARS,
         user_override=config.get("step_summary_truncate_chars"),
     ) or 2000
+    reasoning_model = await engine.resolve_default_reasoning_model(
+        session, workflow.group_id, config=config
+    )
 
     ctx = SkillContext(run_id=run.run_id, artifacts_dir=output_dir)
 
@@ -135,6 +138,7 @@ async def run_analyze_data_collection(
         audit_max_agent_turns=audit_max_turns,
         llm_max_tokens=llm_max_tokens,
         step_summary_truncate_chars=step_summary_truncate,
+        reasoning_model=reasoning_model,
     )
 
     try:

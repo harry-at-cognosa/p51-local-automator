@@ -547,6 +547,11 @@ async def find_and_generate_candidates(
     # ── Phase 2: pick latest per group, LLM-generate only the winners ──
     candidates: list[ReplyCandidate] = []
 
+    # Resolve the fast model once for every winner in this batch.
+    fast_model = await engine.resolve_default_fast_model(
+        session, workflow.group_id, config=workflow.config
+    )
+
     for _to_key, items in grouped.items():
         # Sort by parsed date descending; missing dates land last.
         # `datetime.min` with a tzinfo is a safe minimum that compares correctly.
@@ -576,6 +581,7 @@ async def find_and_generate_candidates(
                 to_address=winner["to_address"],
                 signature=signature,
                 tone=tone,
+                model=fast_model,
             )
         except Exception as e:
             log.error("auto_reply_llm_failed", msg_id=winner["msg_id"], error=str(e))

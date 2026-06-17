@@ -3,16 +3,17 @@
 ## Overview
 
 All LLM calls go through `backend/services/llm_service.py`:
-- **Model:** claude-sonnet-4-20250514 (hardcoded default)
-- **Max tokens:** 4096 (hardcoded default)
+- **Model:** resolved from the `default_fast_model` setting (default `claude-sonnet-4-6`; editable at `/app/admin/settings`). Runner code resolves the value via `workflow_engine.resolve_default_fast_model(...)` and passes it explicitly.
+- **Max tokens:** 16384 for `judge_structured`, 1024 for `complete_text` (defaults; callers may override)
 - **Caching:** Prompt caching enabled for system prompts
-- **Output format:** All prompts require JSON-only responses
+- **Output format:** `judge_structured` callers require JSON; `complete_text` callers get plain text
 
 ## Central LLM Function
 
-**`judge_structured()` (lines 25-68):**
+**`judge_structured()`:**
 ```python
-def judge_structured(system, user_prompt, model="claude-sonnet-4-20250514", max_tokens=4096):
+def judge_structured(system, user_prompt, model=None, max_tokens=16384):
+    # model=None falls back to workflow_engine.DEFAULT_FAST_MODEL_FALLBACK
     # Makes API call with cache_control on system prompt
     # Strips markdown code fences from response
     # Parses JSON; returns {"result": parsed_json, "usage": token_counts}

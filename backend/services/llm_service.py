@@ -25,17 +25,31 @@ def get_client() -> anthropic.Anthropic:
 def judge_structured(
     system: str,
     user_prompt: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = 16384,
 ) -> dict:
     """Make a single LLM call expecting JSON output. Returns parsed dict + token usage.
 
+    `model` is the Anthropic model ID. When None, falls back to
+    `workflow_engine.DEFAULT_FAST_MODEL_FALLBACK`. Callers in workflow
+    runners should resolve the value via
+    `workflow_engine.resolve_default_fast_model(...)` so the operator's
+    `default_fast_model` setting (editable in /app/admin/settings) takes
+    effect; passing `None` here is a safety net for direct callers that
+    don't have a DB session handy.
+
     `max_tokens` defaults to 16384 — large enough to comfortably hold the
     JSON response for ~250 email categorizations before truncation becomes
-    a risk. The model (claude-sonnet-4) supports much higher caps; raise
-    this if a single call routinely exceeds 16k output tokens. Callers
-    that know their output is small can pass a smaller value to save tokens.
+    a risk. The Sonnet-tier model supports much higher caps; raise this
+    if a single call routinely exceeds 16k output tokens. Callers that
+    know their output is small can pass a smaller value to save tokens.
     """
+    if model is None:
+        # Lazy import — workflow_engine imports DB models, and llm_service
+        # is in turn imported by code that workflow_engine depends on;
+        # a top-level import would risk a cycle.
+        from backend.services.workflow_engine import DEFAULT_FAST_MODEL_FALLBACK
+        model = DEFAULT_FAST_MODEL_FALLBACK
     client = get_client()
 
     response = client.messages.create(
@@ -78,7 +92,7 @@ def judge_structured(
 def complete_text(
     system: str,
     user_prompt: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = 1024,
 ) -> dict:
     """Plain-text LLM completion (no JSON forcing). Returns {"text": str, "usage": {...}}.
@@ -87,7 +101,14 @@ def complete_text(
     short explanation, etc. — and JSON structure would be overkill. Differs
     from `judge_structured` only in that the response is returned verbatim
     rather than parsed.
+
+    Same model-resolution contract as `judge_structured`: pass an explicit
+    model id from `resolve_default_fast_model(...)` in workflow code;
+    `None` falls back to `workflow_engine.DEFAULT_FAST_MODEL_FALLBACK`.
     """
+    if model is None:
+        from backend.services.workflow_engine import DEFAULT_FAST_MODEL_FALLBACK
+        model = DEFAULT_FAST_MODEL_FALLBACK
     client = get_client()
 
     response = client.messages.create(
@@ -111,7 +132,12 @@ def complete_text(
     return {"text": text, "usage": usage}
 
 
-def categorize_emails(emails: list[dict], topics: list[str], scope: str = "") -> dict:
+def categorize_emails(
+    emails: list[dict],
+    topics: list[str],
+    scope: str = "",
+    model: str | None = None,
+) -> dict:
     """Categorize a batch of emails by topic and urgency.
 
     Args:
@@ -119,6 +145,9 @@ def categorize_emails(emails: list[dict], topics: list[str], scope: str = "") ->
         topics: List of topic names (e.g. ["Business & Finance", "Technology & AI"])
         scope: Focus area filter. "all" or empty = include everything.
                Otherwise, only categorize emails related to the scope description.
+        model: Anthropic model ID. None → judge_structured's settings-chain
+               fallback. Pass an explicit value from
+               resolve_default_fast_model(...) in workflow runners.
 
     Returns:
         dict with "result" (list of categorized emails) and "usage" (token counts)
@@ -158,7 +187,7 @@ Return ONLY the JSON array, no other text."""
 
     user_prompt = f"Categorize these {len(emails)} emails:\n\n" + "\n".join(email_lines)
 
-    return judge_structured(system, user_prompt)
+    return judge_structured(system, user_prompt, model=model)
 
 
 def generate_email_reply(
@@ -168,6 +197,7 @@ def generate_email_reply(
     to_address: str,
     signature: str = "",
     tone: str = "warm and professional",
+    model: str | None = None,
 ) -> dict:
     """Generate a short acknowledgment reply for an inbound message.
 
@@ -216,7 +246,7 @@ def generate_email_reply(
         f"{sig_block}"
     )
 
-    result = judge_structured(system, user_prompt)
+    result = judge_structured(system, user_prompt, model=model)
 
     # If a signature was provided, append it to the body the LLM returned so
     # the model can't accidentally omit it. If NOT provided and the model

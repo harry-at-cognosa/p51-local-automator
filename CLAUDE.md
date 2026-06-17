@@ -50,7 +50,7 @@ Mac Mini server platform for small businesses (<15 users). Employees configure a
 
 ## Workflow limits
 
-All numeric workflow caps resolve through `resolve_int_setting()` in `backend/services/workflow_engine.py` with a 3-layer chain: `workflow.config[<key>]` → `group_settings(group_id, <key>)` → `api_settings(<key>)` → runner-local fallback. Each key is exported as a `SETTING_*` constant in the same file. Defaults are seeded by Alembic migration `e1f3b2a8d6c5_seed_workflow_limit_defaults.py`.
+Per-workflow tunable settings resolve through `resolve_int_setting()` (numeric) or `resolve_str_setting()` (string) in `backend/services/workflow_engine.py` with a 3-layer chain: `workflow.config[<key>]` → `group_settings(group_id, <key>)` → `api_settings(<key>)` → runner-local fallback. Each key is exported as a `SETTING_*` constant in the same file. Defaults are seeded by Alembic migrations — the numeric workflow-limit defaults live in `e1f3b2a8d6c5_seed_workflow_limit_defaults.py`; the model-id defaults in `c2a8e4f9b3d1_seed_default_model_settings.py`.
 
 | Setting key | Default | Used by | Meaning |
 |---|---|---|---|
@@ -67,6 +67,8 @@ All numeric workflow caps resolve through `resolve_int_setting()` in `backend/se
 | `step_summary_truncate_chars` | 2000 | Type 7 | Step output truncation |
 | `reaper_max_senders` | 150 | Type 8 | Max sender rows per Email Reaper workflow |
 | `reaper_fetch_limit_per_sender` | 500 | Type 8 | Max messages scanned (and trashed) per sender per run |
+| `default_fast_model` | `claude-sonnet-4-6` | Types 1, 2, 3, 4, 5, 6, 9 | Anthropic model id for `llm_service.judge_structured` / `complete_text` callers (Sonnet-tier) |
+| `default_reasoning_model` | `claude-opus-4-8` | Type 7 (AgenticEngine) | Anthropic model id for the analyze loop, synthesize, and scribe stages (Opus-tier) |
 
 **Absolute ceilings** live in code as runaway-cost guards and cannot be exceeded via api_settings: `ABS_MAX_AGENT_TURNS = 100`, `ABS_MAX_LLM_TOKENS = 16384` in `workflow_engine.py`. Values above these are silently clamped at run time. Bump only by editing source.
 

@@ -181,7 +181,10 @@ async def run_data_analyzer(
 
 {summary_text or "(summary not available)"}"""
 
-        llm_result = llm_service.judge_structured(LLM_SYSTEM_PROMPT, user_prompt)
+        fast_model = await engine.resolve_default_fast_model(
+            session, workflow.group_id, config=workflow.config
+        )
+        llm_result = llm_service.judge_structured(LLM_SYSTEM_PROMPT, user_prompt, model=fast_model)
         analysis = llm_result["result"]
         usage = llm_result["usage"]
         total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
