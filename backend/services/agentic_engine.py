@@ -42,7 +42,7 @@ log = get_logger("agentic_engine")
 _SUMMARY_MAX_CHARS = 2000
 
 # Anthropic model defaults. Opus for reasoning-heavy stages.
-DEFAULT_REASONING_MODEL = "claude-opus-4-7"
+DEFAULT_REASONING_MODEL = "claude-opus-4-8"
 
 # Stage-tool mapping. analyze gets the read-write computation surface;
 # audit (A4) will get the read-only inspection surface; data_io is never

@@ -25,7 +25,7 @@ def get_client() -> anthropic.Anthropic:
 def judge_structured(
     system: str,
     user_prompt: str,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     max_tokens: int = 16384,
 ) -> dict:
     """Make a single LLM call expecting JSON output. Returns parsed dict + token usage.
@@ -78,7 +78,7 @@ def judge_structured(
 def complete_text(
     system: str,
     user_prompt: str,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     max_tokens: int = 1024,
 ) -> dict:
     """Plain-text LLM completion (no JSON forcing). Returns {"text": str, "usage": {...}}.
