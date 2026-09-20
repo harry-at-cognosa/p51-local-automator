@@ -46,7 +46,8 @@ export interface Filters {
   category: string; // category_key or ""
   type: string;     // type_id as string or ""
   name: string;     // substring match, case-insensitive
-  status: string;   // "completed" | "running" | "failed" | "pending" | ""
+  status: string;   // run status: "completed" | "running" | "failed" | "pending" | ""
+  jobStatus: string; // schedule status: "active" | "expired" | "paused" | "unscheduled" | ""
 }
 
 // All sort options are descending (newest first).
@@ -81,7 +82,7 @@ interface Persisted {
   sortBy: SortBy;
 }
 
-const DEFAULT_FILTERS: Filters = { category: "", type: "", name: "", status: "" };
+const DEFAULT_FILTERS: Filters = { category: "", type: "", name: "", status: "", jobStatus: "" };
 
 export const useWorkflowsStore = create<WorkflowsState>()(
   persist(

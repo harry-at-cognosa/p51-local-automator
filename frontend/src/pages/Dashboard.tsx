@@ -4,7 +4,7 @@
  * Four trimmed sections, top to bottom:
  *   1. Header strip — flower logo | title + version pill | CogWrite logo
  *   2. Stats row (Workflows / Total Runs / Runs Today / Scheduler)
- *   3. Most Recent Workflow Runs (3 rows, role-scoped via /dashboard/recent-runs)
+ *   3. Most Recent Workflow Runs (7 rows, role-scoped via /dashboard/recent-runs)
  *   4. Available Workflow Types (shared cards grid)
  *
  * Trim color comes from getTrimColor() in the settings store, falling back to
@@ -38,6 +38,7 @@ interface RecentRun {
   status: string;
   started_at: string;
   is_adhoc?: boolean;
+  artifact_count?: number;
 }
 
 interface HealthResponse {
@@ -62,7 +63,7 @@ export default function Dashboard() {
   useEffect(() => {
     axiosClient.get<DashboardStats>("/dashboard/stats").then((res) => setStats(res.data));
     axiosClient
-      .get<RecentRun[]>("/dashboard/recent-runs", { params: { limit: 3 } })
+      .get<RecentRun[]>("/dashboard/recent-runs", { params: { limit: 7 } })
       .then((res) => setRecentRuns(res.data));
     if (showHealthBanner) {
       axiosClient.get<HealthResponse>("/system/health").then((res) => setHealth(res.data));
@@ -234,7 +235,18 @@ export default function Dashboard() {
                       </span>
                     )}
                   </td>
-                  <td><StatusBadge status={r.status} /></td>
+                  <td>
+                    <StatusBadge status={r.status} />
+                    {r.status === "completed" && r.artifact_count === 0 && (
+                      <span
+                        className="ms-1"
+                        title="Run completed but produced no output"
+                        style={{ cursor: "help" }}
+                      >
+                        ⚠️
+                      </span>
+                    )}
+                  </td>
                   <td>{new Date(r.started_at).toLocaleString()}</td>
                 </tr>
               ))}

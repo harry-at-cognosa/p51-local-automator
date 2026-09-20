@@ -304,7 +304,8 @@ def human_summary(s: Schedule) -> str:
 
     every = "" if s.week_interval == 1 else f"every {s.week_interval} weeks on "
     time_part = time(s.hour, s.minute).strftime("%I:%M %p").lstrip("0")
-    return f"{every}{day_part} at {time_part} {s.tz.key}"
+    until = f" · until {s.ends_on.isoformat()}" if s.ends_on else ""
+    return f"{every}{day_part} at {time_part} {s.tz.key}{until}"
 
 
 # ── internal helpers ────────────────────────────────────────

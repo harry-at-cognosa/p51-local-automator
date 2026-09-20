@@ -7,11 +7,18 @@ import StatusBadge from "../components/StatusBadge";
 import TableVCRPager from "../components/TableVCRPager";
 import EditScheduleModal from "../components/EditScheduleModal";
 import { useWorkflowsStore } from "../stores/workflowsStore";
+import {
+  jobStatus,
+  JOB_STATUS_LABELS,
+  JOB_STATUS_VARIANTS,
+  type JobStatus,
+} from "../lib/scheduleStatus";
 
 interface ScheduleEntry {
   workflow_id: number;
   next_fires_utc: string[];
   enabled: boolean;
+  schedule: Record<string, unknown> | null;
 }
 
 function formatFireShort(iso: string): string {
@@ -26,6 +33,8 @@ function formatFireShort(iso: string): string {
 
 const STATUS_OPTIONS = ["completed", "running", "failed", "pending"];
 const STATUS_NONE = "__none__";
+
+const JOB_STATUS_OPTIONS: JobStatus[] = ["active", "expired", "paused", "unscheduled"];
 
 export default function Workflows() {
   const navigate = useNavigate();
@@ -93,6 +102,10 @@ export default function Workflows() {
         } else if (w.latest_run_status !== filters.status) {
           return false;
         }
+      }
+      if (filters.jobStatus) {
+        const sch = scheduleMap[w.workflow_id];
+        if (jobStatus(sch?.schedule, sch?.enabled ?? false) !== filters.jobStatus) return false;
       }
       if (nameQ && !w.name.toLowerCase().includes(nameQ)) return false;
       if (scheduledOnly && !scheduleMap[w.workflow_id]) return false;
@@ -241,7 +254,8 @@ export default function Workflows() {
                 <th>Category</th>
                 <th>Type</th>
                 <th>Name <span className="text-muted fw-normal small">(click to review)</span></th>
-                <th>Status</th>
+                <th>Run Status</th>
+                <th>Job Status</th>
                 <th>Last Run</th>
                 <th>Next Fire</th>
               </tr>
@@ -307,6 +321,20 @@ export default function Workflows() {
                     ))}
                   </Form.Select>
                 </th>
+                <th>
+                  <Form.Select
+                    size="sm"
+                    value={filters.jobStatus}
+                    onChange={(e) => setFilter("jobStatus", e.target.value)}
+                  >
+                    <option value="">(any)</option>
+                    {JOB_STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s === "unscheduled" ? "(no schedule)" : JOB_STATUS_LABELS[s]}
+                      </option>
+                    ))}
+                  </Form.Select>
+                </th>
                 <th></th>
                 <th></th>
               </tr>
@@ -347,6 +375,24 @@ export default function Workflows() {
                           ⚠️
                         </span>
                       )}
+                    </td>
+                    <td>
+                      {(() => {
+                        const sch = scheduleMap[w.workflow_id];
+                        const js = jobStatus(sch?.schedule, sch?.enabled ?? false);
+                        if (js === "unscheduled") {
+                          return <span className="text-muted" title="No schedule">—</span>;
+                        }
+                        const endsOn = sch?.schedule?.ends_on as string | undefined;
+                        return (
+                          <span
+                            className={`badge bg-${JOB_STATUS_VARIANTS[js]}`}
+                            title={endsOn ? `Schedule runs until ${endsOn}` : undefined}
+                          >
+                            {JOB_STATUS_LABELS[js]}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td>{w.latest_run_at ? new Date(w.latest_run_at).toLocaleString() : "Never"}</td>
                     <td className="small">
@@ -389,7 +435,7 @@ export default function Workflows() {
               })}
               {pageItems.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="text-center text-muted py-3">
+                  <td colSpan={9} className="text-center text-muted py-3">
                     No workflows match the current filters.{" "}
                     <Button variant="link" size="sm" onClick={() => { clearSelection(); useWorkflowsStore.getState().resetFilters(); }}>
                       Clear filters

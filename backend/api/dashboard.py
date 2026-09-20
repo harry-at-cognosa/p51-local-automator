@@ -21,6 +21,7 @@ from backend.db.session import async_get_session
 from backend.db.models import (
     User,
     UserWorkflows,
+    WorkflowArtifacts,
     WorkflowCategories,
     WorkflowRuns,
     WorkflowTypes,
@@ -55,6 +56,9 @@ class DashboardRecentRun(BaseModel):
     status: str
     started_at: datetime
     is_adhoc: bool = False
+    # Number of artifacts the run produced. The Dashboard flags a run that
+    # completed but wrote nothing — see the same ⚠️ on the Workflows list.
+    artifact_count: int = 0
 
     class Config:
         from_attributes = True
@@ -115,11 +119,29 @@ async def recent_runs(
     """Most-recent N runs visible to the caller under the role-scope rule."""
     scope = _run_scope_filter(user)
 
+    # Artifact count per run, LEFT JOINed so a run that produced nothing
+    # still comes back (as NULL -> 0) rather than dropping out of the list.
+    artifact_counts = (
+        select(
+            WorkflowArtifacts.run_id,
+            func.count(WorkflowArtifacts.artifact_id).label("artifact_count"),
+        )
+        .group_by(WorkflowArtifacts.run_id)
+        .subquery()
+    )
+
     result = await session.execute(
-        select(WorkflowRuns, UserWorkflows, WorkflowTypes, WorkflowCategories)
+        select(
+            WorkflowRuns,
+            UserWorkflows,
+            WorkflowTypes,
+            WorkflowCategories,
+            artifact_counts.c.artifact_count,
+        )
         .join(UserWorkflows, UserWorkflows.workflow_id == WorkflowRuns.workflow_id)
         .join(WorkflowTypes, WorkflowTypes.type_id == UserWorkflows.type_id)
         .join(WorkflowCategories, WorkflowCategories.category_id == WorkflowTypes.category_id)
+        .outerjoin(artifact_counts, artifact_counts.c.run_id == WorkflowRuns.run_id)
         .where(
             UserWorkflows.deleted == 0,
             WorkflowRuns.archived.is_(False),
@@ -130,7 +152,7 @@ async def recent_runs(
     )
 
     rows = []
-    for run, workflow, wf_type, category in result.all():
+    for run, workflow, wf_type, category, artifact_count in result.all():
         rows.append(
             DashboardRecentRun(
                 run_id=run.run_id,
@@ -143,6 +165,7 @@ async def recent_runs(
                 status=run.status,
                 started_at=run.started_at,
                 is_adhoc=workflow.is_adhoc,
+                artifact_count=int(artifact_count or 0),
             )
         )
     return rows
