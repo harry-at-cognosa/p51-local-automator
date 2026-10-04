@@ -5,12 +5,14 @@ import SideMenu from "./components/SideMenu";
 import NavigationInjector from "./api/NavigationInjector";
 import { useAuthStore } from "./stores/useAuthStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
+import { useGroupContextStore } from "./stores/useGroupContextStore";
 import { API_URL } from "./api/apiURL";
 
 export default function App() {
   const { setLoggedUser, isLogged } = useAuthStore();
   const navigate = useNavigate();
   const { loaded, fetchSettings } = useSettingsStore();
+  const groupContext = useGroupContextStore((s) => s.selected);
 
   useEffect(() => {
     if (!loaded) fetchSettings();
@@ -47,7 +49,10 @@ export default function App() {
       <TopNavBar />
       <div className="d-flex">
         <SideMenu />
-        <main className="flex-grow-1">
+        {/* Keyed on the acting group: switching remounts the routed page so
+            it refetches under the new context, rather than continuing to
+            show rows fetched for the previous group. */}
+        <main className="flex-grow-1" key={String(groupContext)}>
           <Outlet />
         </main>
       </div>

@@ -6,6 +6,7 @@ import ConfigSnapshotPanel from "../components/ConfigSnapshotPanel";
 import MarkdownRender from "../components/MarkdownRender";
 import type { FieldDescriptor } from "../components/SchemaConfigForm";
 import axiosClient from "../api/axiosClient";
+import { currentGroupContextHeader } from "../stores/useGroupContextStore";
 
 interface WorkflowRun {
   run_id: number;
@@ -93,10 +94,13 @@ export default function RunDetail() {
   const chartUrlByName = (() => {
     const map: Record<string, string> = {};
     const token = localStorage.getItem("token");
+    // A download link is a browser navigation and cannot set headers,
+    // so the acting group travels as a query param alongside the token.
+    const gc = currentGroupContextHeader();
     for (const a of artifacts) {
       if (a.file_type === "png" && a.file_exists) {
         const name = a.file_path.split("/").pop() || "";
-        map[name] = `/api/v1/artifacts/${a.artifact_id}/download?token=${token}`;
+        map[name] = `/api/v1/artifacts/${a.artifact_id}/download?token=${token}&group_context=${gc}`;
       }
     }
     return map;
@@ -239,7 +243,11 @@ export default function RunDetail() {
                         title={!a.file_exists ? "File no longer exists on disk" : undefined}
                         onClick={() => {
                           const token = localStorage.getItem("token");
-                          window.open(`/api/v1/artifacts/${a.artifact_id}/download?token=${token}`, "_blank");
+                          const gc = currentGroupContextHeader();
+                          window.open(
+                            `/api/v1/artifacts/${a.artifact_id}/download?token=${token}&group_context=${gc}`,
+                            "_blank"
+                          );
                         }}
                       >
                         Download

@@ -36,8 +36,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.dashboard import _run_scope_filter
 from backend.auth.users import current_active_user
+from backend.api.group_context import (
+    GroupContext,
+    get_group_context,
+    require_concrete_group,
+    scope_filter,
+)
 from backend.db.models import (
     User,
     UserWorkflows,
@@ -162,14 +167,22 @@ def _redact_config(config: dict) -> dict:
 async def _fetch_or_create_adhoc_workflow(
     session: AsyncSession,
     user: User,
+    ctx: GroupContext,
     type_id: int,
     default_name: str,
 ) -> UserWorkflows:
-    """One ad-hoc row per (user_id, type_id, is_adhoc=true). Auto-create
-    with sensible defaults if none exists."""
+    """One ad-hoc row per (user_id, group_id, type_id, is_adhoc=true).
+    Auto-create with sensible defaults if none exists.
+
+    group_id is part of the key, not just the stamp: a superuser acting as
+    another group must get that group's ad-hoc row, or they would reuse the
+    one from their home group and its run would write artifacts under the
+    home group's filesystem root — a cross-group write by the back door."""
+    acting_group = require_concrete_group(ctx)
     result = await session.execute(
         select(UserWorkflows).where(
             UserWorkflows.user_id == user.user_id,
+            UserWorkflows.group_id == acting_group,
             UserWorkflows.type_id == type_id,
             UserWorkflows.is_adhoc.is_(True),
             UserWorkflows.deleted == 0,
@@ -180,7 +193,7 @@ async def _fetch_or_create_adhoc_workflow(
         return workflow
     workflow = UserWorkflows(
         user_id=user.user_id,
-        group_id=user.group_id,
+        group_id=acting_group,
         type_id=type_id,
         name=default_name,
         config={
@@ -290,10 +303,11 @@ def _serialize_read(workflow: UserWorkflows) -> AdHocEmailMonitorRead:
 )
 async def get_email_topic_monitor(
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     workflow = await _fetch_or_create_adhoc_workflow(
-        session, user, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
+        session, user, ctx, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
     )
     return _serialize_read(workflow)
 
@@ -305,10 +319,11 @@ async def get_email_topic_monitor(
 async def save_email_topic_monitor(
     body: AdHocEmailMonitorWrite,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     workflow = await _fetch_or_create_adhoc_workflow(
-        session, user, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
+        session, user, ctx, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
     )
     _apply_write_to_workflow(workflow, body)
     # The dual mutate in _apply_write_to_workflow doesn't always flag
@@ -328,10 +343,11 @@ async def run_email_topic_monitor(
     body: AdHocEmailMonitorWrite,
     background_tasks: BackgroundTasks,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     workflow = await _fetch_or_create_adhoc_workflow(
-        session, user, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
+        session, user, ctx, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
     )
     _apply_write_to_workflow(workflow, body)
     from sqlalchemy.orm.attributes import flag_modified
@@ -404,6 +420,7 @@ async def _test_one_account(
 async def test_email_topic_monitor(
     body: AdHocEmailMonitorWrite,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Validate the supplied credentials against each account in
@@ -415,7 +432,7 @@ async def test_email_topic_monitor(
     nothing is stored, that account reports an error.
     """
     workflow = await _fetch_or_create_adhoc_workflow(
-        session, user, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
+        session, user, ctx, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
     )
 
     # Build a transient workflow.config that reflects the form state.
@@ -474,12 +491,13 @@ async def test_email_topic_monitor(
 )
 async def clear_email_topic_monitor(
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Wipe both backends for every account on this workflow, then
     reset the rest of the form fields to their defaults."""
     workflow = await _fetch_or_create_adhoc_workflow(
-        session, user, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
+        session, user, ctx, EMAIL_TOPIC_MONITOR_TYPE_ID, ADHOC_NAME_EMAIL_TOPIC_MONITOR,
     )
     gmail_password_store.clear_for_workflow(workflow)
     workflow.config = {
@@ -528,10 +546,11 @@ ADHOC_RUNS_LIMIT = 50
 )
 async def list_adhoc_runs(
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Read-only cross-type history of ad-hoc runs visible to the
-    caller under the standard _run_scope_filter rule (superuser → all,
+    caller under the standard group-scope rule (superuser → all,
     groupadmin/manager → group, everyone else → own).
 
     Hides archived runs unconditionally. The list-Workflows
@@ -576,7 +595,7 @@ async def list_adhoc_runs(
             UserWorkflows.deleted == 0,
             WorkflowRuns.archived.is_(False),
         )
-        .where(*_run_scope_filter(user))
+        .where(*scope_filter(ctx))
         .order_by(WorkflowRuns.started_at.desc())
         .limit(ADHOC_RUNS_LIMIT)
     )

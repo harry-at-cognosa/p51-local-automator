@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.session import async_get_session
 from backend.db.models import User
 from backend.auth.users import current_active_user
+from backend.api.group_context import GroupContext, get_group_context, require_concrete_group
 from backend.services.workflow_engine import get_user_inputs_dir
 
 
@@ -75,6 +76,7 @@ async def list_files(
         description="Comma-separated extensions (e.g. 'csv,xlsx'). Files filtered by these; directories always shown for navigation.",
     ),
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """List entries under the authenticated user's inputs sandbox.
@@ -83,7 +85,7 @@ async def list_files(
     returned as `entries: []` with the resolved path so the frontend can
     show the user where to drop files.
     """
-    root = await get_user_inputs_dir(session, user.group_id, user.user_id)
+    root = await get_user_inputs_dir(session, require_concrete_group(ctx), user.user_id)
     target = _safe_resolve(root, subpath)
 
     if not os.path.isdir(target):

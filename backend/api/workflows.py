@@ -8,7 +8,6 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from backend.api.dashboard import _run_scope_filter
 from backend.db.session import async_get_session, SqlAsyncSession
 from backend.db.models import (
     EmailAutoReplyLog,
@@ -39,6 +38,12 @@ from backend.db.schemas import (
     WorkflowArtifactRead,
 )
 from backend.auth.users import current_active_user
+from backend.api.group_context import (
+    GroupContext,
+    get_group_context,
+    require_concrete_group,
+    scope_filter,
+)
 from backend.services import gmail_client, mcp_client
 from backend.services import secrets as crypto
 from backend.services.logger_service import get_logger
@@ -245,6 +250,7 @@ async def admin_update_workflow_type(
 async def list_workflows(
     include_adhoc: bool = False,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     # Ad-hoc rows are hidden from the main Workflows list. Superuser may
@@ -319,7 +325,7 @@ async def list_workflows(
             selectinload(UserWorkflows.workflow_type).selectinload(WorkflowTypes.category)
         )
         .where(UserWorkflows.deleted == 0)
-        .where(*_run_scope_filter(user))
+        .where(*scope_filter(ctx))
         .where(*([] if show_adhoc else [UserWorkflows.is_adhoc.is_(False)]))
         .order_by(UserWorkflows.created_at.desc())
     )
@@ -365,6 +371,7 @@ async def list_workflows(
 async def create_workflow(
     body: UserWorkflowCreate,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     wf_type = await session.get(WorkflowTypes, body.type_id)
@@ -375,7 +382,7 @@ async def create_workflow(
 
     workflow = UserWorkflows(
         user_id=user.user_id,
-        group_id=user.group_id,
+        group_id=require_concrete_group(ctx),
         type_id=body.type_id,
         name=body.name,
         config=config,
@@ -397,6 +404,7 @@ async def create_workflow(
 async def bulk_delete_workflows(
     body: BulkDeleteRequest,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     if not body.workflow_ids:
@@ -407,7 +415,7 @@ async def bulk_delete_workflows(
     result = await session.execute(
         update(UserWorkflows)
         .where(UserWorkflows.workflow_id.in_(body.workflow_ids))
-        .where(UserWorkflows.group_id == user.group_id)
+        .where(UserWorkflows.group_id == require_concrete_group(ctx))
         .where(UserWorkflows.deleted == 0)
         .where(UserWorkflows.is_adhoc.is_(False))
         .values(deleted=1)
@@ -441,13 +449,13 @@ def _scope_blocks(workflow: UserWorkflows | None, scope: str) -> bool:
 async def _get_active_workflow(
     session: AsyncSession,
     workflow_id: int,
-    user: User,
+    ctx: GroupContext,
     scope: str = "main",
 ) -> UserWorkflows:
     workflow = await session.get(UserWorkflows, workflow_id)
     if (
         not workflow
-        or workflow.group_id != user.group_id
+        or workflow.group_id != require_concrete_group(ctx)
         or workflow.deleted != 0
         or _scope_blocks(workflow, scope)
     ):
@@ -458,7 +466,7 @@ async def _get_active_workflow(
 async def _load_workflow_with_type(
     session: AsyncSession,
     workflow_id: int,
-    user: User,
+    ctx: GroupContext,
     scope: str = "main",
 ) -> UserWorkflows:
     """Same access guard as _get_active_workflow but eager-loads the type+category."""
@@ -470,7 +478,7 @@ async def _load_workflow_with_type(
     workflow = result.scalar_one_or_none()
     if (
         not workflow
-        or workflow.group_id != user.group_id
+        or workflow.group_id != require_concrete_group(ctx)
         or workflow.deleted != 0
         or _scope_blocks(workflow, scope)
     ):
@@ -500,9 +508,10 @@ def _serialize_workflow(workflow: UserWorkflows) -> UserWorkflowRead:
 async def get_workflow(
     workflow_id: int,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
-    workflow = await _load_workflow_with_type(session, workflow_id, user)
+    workflow = await _load_workflow_with_type(session, workflow_id, ctx)
     return _serialize_workflow(workflow)
 
 
@@ -511,9 +520,10 @@ async def update_workflow(
     workflow_id: int,
     body: UserWorkflowUpdate,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
-    workflow = await _load_workflow_with_type(session, workflow_id, user)
+    workflow = await _load_workflow_with_type(session, workflow_id, ctx)
     existing_config = dict(workflow.config) if workflow.config else {}
 
     for field, value in body.model_dump(exclude_unset=True).items():
@@ -548,6 +558,7 @@ class ScheduleListItem(BaseModel):
 @router_workflows.get("/schedules", response_model=list[ScheduleListItem])
 async def list_schedules(
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """All scheduled workflows visible to the caller.
@@ -566,7 +577,7 @@ async def list_schedules(
         parse_schedule,
     )
 
-    scope = _run_scope_filter(user)
+    scope = scope_filter(ctx)
 
     # Subquery: latest run_id per workflow (any trigger). Left-joined so
     # workflows that have never run still appear in the list with
@@ -657,6 +668,7 @@ async def preview_schedule(
     workflow_id: int,
     body: SchedulePreviewRequest,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Return a human summary + next N fire times for a candidate schedule.
@@ -665,7 +677,7 @@ async def preview_schedule(
     schedules against workflows they're allowed to see) but does not mutate
     anything — the candidate schedule never touches the DB.
     """
-    await _load_workflow_with_type(session, workflow_id, user)
+    await _load_workflow_with_type(session, workflow_id, ctx)
 
     from backend.services.schedule import (
         ScheduleError,
@@ -689,9 +701,10 @@ async def preview_schedule(
 async def delete_workflow(
     workflow_id: int,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
-    workflow = await _get_active_workflow(session, workflow_id, user)
+    workflow = await _get_active_workflow(session, workflow_id, ctx)
     workflow.deleted = 1
     await session.commit()
     return {"detail": "Workflow deleted"}
@@ -705,9 +718,10 @@ async def list_runs(
     workflow_id: int,
     include_archived: bool = False,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
-    workflow = await _get_active_workflow(session, workflow_id, user)
+    workflow = await _get_active_workflow(session, workflow_id, ctx)
 
     # Archived runs are hidden by default. Superusers can opt in via
     # ?include_archived=true; non-superusers are silently forced to false.
@@ -880,9 +894,10 @@ async def trigger_run(
     workflow_id: int,
     background_tasks: BackgroundTasks,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
-    workflow = await _get_active_workflow(session, workflow_id, user)
+    workflow = await _get_active_workflow(session, workflow_id, ctx)
 
     if workflow.type_id not in WORKFLOW_RUNNERS:
         raise HTTPException(status_code=400, detail=f"No runner for workflow type {workflow.type_id}")
@@ -918,13 +933,14 @@ async def trigger_run(
 async def get_run(
     run_id: int,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     run = await session.get(WorkflowRuns, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     workflow = await session.get(UserWorkflows, run.workflow_id)
-    if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
+    if not workflow or workflow.group_id != require_concrete_group(ctx) or workflow.deleted != 0:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.archived and not user.is_superuser:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -969,13 +985,14 @@ async def get_run(
 async def get_run_steps(
     run_id: int,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     run = await session.get(WorkflowRuns, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     workflow = await session.get(UserWorkflows, run.workflow_id)
-    if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
+    if not workflow or workflow.group_id != require_concrete_group(ctx) or workflow.deleted != 0:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.archived and not user.is_superuser:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -990,13 +1007,14 @@ async def get_run_steps(
 async def get_run_artifacts(
     run_id: int,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     run = await session.get(WorkflowRuns, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     workflow = await session.get(UserWorkflows, run.workflow_id)
-    if not workflow or workflow.group_id != user.group_id or workflow.deleted != 0:
+    if not workflow or workflow.group_id != require_concrete_group(ctx) or workflow.deleted != 0:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.archived and not user.is_superuser:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -1027,7 +1045,7 @@ async def get_run_artifacts(
 
 
 async def _get_pending_reply(
-    session: AsyncSession, pending_id: int, user: User
+    session: AsyncSession, pending_id: int, ctx: GroupContext
 ) -> PendingEmailReplies:
     """Fetch a pending reply, enforcing group ownership via the parent workflow."""
     pending = await session.get(PendingEmailReplies, pending_id)
@@ -1036,7 +1054,7 @@ async def _get_pending_reply(
     workflow = await session.get(UserWorkflows, pending.workflow_id)
     if (
         not workflow
-        or workflow.group_id != user.group_id
+        or workflow.group_id != require_concrete_group(ctx)
         or workflow.deleted != 0
     ):
         raise HTTPException(status_code=404, detail="Pending reply not found")
@@ -1051,10 +1069,11 @@ async def list_pending_replies(
     workflow_id: int,
     status: str | None = None,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """List pending replies for a workflow. Defaults to status='pending' only."""
-    await _get_active_workflow(session, workflow_id, user)
+    await _get_active_workflow(session, workflow_id, ctx)
 
     query = (
         select(PendingEmailReplies)
@@ -1116,10 +1135,11 @@ async def approve_pending_reply(
     pending_id: int,
     body: PendingEmailReplyActionRequest,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Send the reply as-drafted (or the user's lightly-edited body if provided)."""
-    pending = await _get_pending_reply(session, pending_id, user)
+    pending = await _get_pending_reply(session, pending_id, ctx)
     if pending.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
 
@@ -1162,10 +1182,11 @@ async def save_pending_reply_as_draft(
     pending_id: int,
     body: PendingEmailReplyActionRequest,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Save the (possibly edited) reply to the account's Drafts folder."""
-    pending = await _get_pending_reply(session, pending_id, user)
+    pending = await _get_pending_reply(session, pending_id, ctx)
     if pending.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
 
@@ -1206,11 +1227,12 @@ async def save_pending_reply_as_draft(
 async def reject_pending_reply(
     pending_id: int,
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Reject: no email is sent or saved. Source message stays in the dedup log
     so it won't be re-queued on the next scheduled scan."""
-    pending = await _get_pending_reply(session, pending_id, user)
+    pending = await _get_pending_reply(session, pending_id, ctx)
     if pending.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already resolved as '{pending.status}'")
 

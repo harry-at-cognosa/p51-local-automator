@@ -19,7 +19,6 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.session import async_get_session
 from backend.db.models import (
-    User,
     UserWorkflows,
     WorkflowArtifacts,
     WorkflowCategories,
@@ -27,22 +26,16 @@ from backend.db.models import (
     WorkflowTypes,
 )
 from backend.db.schemas import DashboardStats
-from backend.auth.users import current_active_user
+from backend.api.group_context import GroupContext, get_group_context, scope_filter
 from backend.services.scheduler_service import scheduler
 
 router_dashboard = APIRouter(prefix="/dashboard")
 
 
-def _run_scope_filter(user: User) -> list:
-    """Return the where-clauses that scope a query joining UserWorkflows
-    to the runs/workflows the current user should be able to see.
-
-    Returns an empty list for superusers (no filter)."""
-    if user.is_superuser:
-        return []
-    if user.is_groupadmin or user.is_manager:
-        return [UserWorkflows.group_id == user.group_id]
-    return [UserWorkflows.user_id == user.user_id]
+# The role-scope rule used to live here as _run_scope_filter(user) and keyed
+# off the user alone, so a superuser was always system-wide with no way to
+# narrow. It now lives in group_context.scope_filter and keys off the acting
+# group, letting a superuser see exactly what a member of a chosen group sees.
 
 
 class DashboardRecentRun(BaseModel):
@@ -66,10 +59,10 @@ class DashboardRecentRun(BaseModel):
 
 @router_dashboard.get("/stats", response_model=DashboardStats)
 async def get_stats(
-    user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
-    scope = _run_scope_filter(user)
+    scope = scope_filter(ctx)
 
     # Ad-hoc rows aren't user-managed in the conventional sense — they're
     # fluid per-user state behind the Ad-hoc Workflows menu. Don't count
@@ -113,11 +106,11 @@ async def get_stats(
 @router_dashboard.get("/recent-runs", response_model=list[DashboardRecentRun])
 async def recent_runs(
     limit: int = Query(3, ge=1, le=20),
-    user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Most-recent N runs visible to the caller under the role-scope rule."""
-    scope = _run_scope_filter(user)
+    scope = scope_filter(ctx)
 
     # Artifact count per run, LEFT JOINed so a run that produced nothing
     # still comes back (as NULL -> 0) rather than dropping out of the list.

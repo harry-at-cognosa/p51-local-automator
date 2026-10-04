@@ -6,6 +6,7 @@ import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
 import TableVCRPager from "../components/TableVCRPager";
 import EditScheduleModal from "../components/EditScheduleModal";
+import { ALL_GROUPS, useGroupContextStore } from "../stores/useGroupContextStore";
 import { useWorkflowsStore } from "../stores/workflowsStore";
 import {
   jobStatus,
@@ -113,6 +114,14 @@ export default function Workflows() {
     });
   }, [items, filters, scheduledOnly, scheduleMap]);
 
+  // All-groups is a superuser viewing mode: rows from every group are
+  // listed, but nothing can be opened or acted on, because no single group
+  // owns the action. The server enforces this (409); the UI simply doesn't
+  // offer the affordances, so that 409 should never be reachable by hand.
+  const groupSelection = useGroupContextStore((s) => s.selected);
+  const groupName = useGroupContextStore((s) => s.groupName);
+  const viewingAllGroups = groupSelection === ALL_GROUPS;
+
   // Sorted (after filter, before pagination). All sorts are descending.
   // last_run_at puts NULL (never run) rows at the bottom.
   const sorted = useMemo(() => {
@@ -196,7 +205,16 @@ export default function Workflows() {
     <Container fluid className="p-4">
       <div className="d-flex justify-content-between align-items-center mb-4">
         <h3 className="mb-0">My Workflows</h3>
-        <Button variant="primary" onClick={() => setShowCreate(true)}>
+        <Button
+          variant="primary"
+          disabled={viewingAllGroups}
+          title={
+            viewingAllGroups
+              ? "Select a group first — a new workflow has to belong to one."
+              : undefined
+          }
+          onClick={() => setShowCreate(true)}
+        >
           + New Workflow
         </Button>
       </div>
@@ -249,11 +267,20 @@ export default function Workflows() {
           <Table striped bordered hover size="sm" className="mt-2">
             <thead>
               <tr>
-                <th style={{ width: 36 }}></th>
+                {viewingAllGroups ? (
+                  <th style={{ width: 110 }}>Group</th>
+                ) : (
+                  <th style={{ width: 36 }}></th>
+                )}
                 <th style={{ width: 56 }}>ID</th>
                 <th>Category</th>
                 <th>Type</th>
-                <th>Name <span className="text-muted fw-normal small">(click to review)</span></th>
+                <th>
+                  Name{" "}
+                  <span className="text-muted fw-normal small">
+                    {viewingAllGroups ? "(select a group to open)" : "(click to review)"}
+                  </span>
+                </th>
                 <th>Run Status</th>
                 <th>Job Status</th>
                 <th>Last Run</th>
@@ -344,14 +371,18 @@ export default function Workflows() {
                 const checked = selectedIds.has(w.workflow_id);
                 return (
                   <tr key={w.workflow_id}>
-                    <td className="text-center">
-                      <Form.Check
-                        type="checkbox"
-                        aria-label={`Select ${w.name}`}
-                        checked={checked}
-                        onChange={() => toggleSelected(w.workflow_id)}
-                      />
-                    </td>
+                    {viewingAllGroups ? (
+                      <td className="small text-muted">{groupName(w.group_id)}</td>
+                    ) : (
+                      <td className="text-center">
+                        <Form.Check
+                          type="checkbox"
+                          aria-label={`Select ${w.name}`}
+                          checked={checked}
+                          onChange={() => toggleSelected(w.workflow_id)}
+                        />
+                      </td>
+                    )}
                     <td className="text-muted small font-monospace">#{w.workflow_id}</td>
                     <td title={w.type.category.long_name}>{w.type.category.short_name}</td>
                     <td title={`${w.type.long_name}${w.type.type_desc ? " — " + w.type.type_desc : ""}`}>
@@ -359,8 +390,17 @@ export default function Workflows() {
                     </td>
                     <td
                       className="fw-semibold"
-                      style={{ cursor: "pointer" }}
-                      onClick={() => navigate(`/app/workflows/${w.workflow_id}`)}
+                      style={{ cursor: viewingAllGroups ? "default" : "pointer" }}
+                      title={
+                        viewingAllGroups
+                          ? `In ${groupName(w.group_id)}. Switch to that group to open it.`
+                          : undefined
+                      }
+                      onClick={
+                        viewingAllGroups
+                          ? undefined
+                          : () => navigate(`/app/workflows/${w.workflow_id}`)
+                      }
                     >
                       {w.name}
                     </td>

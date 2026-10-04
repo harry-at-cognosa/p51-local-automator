@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.users import current_active_user
+from backend.api.group_context import GroupContext, get_group_context, group_or_home
 from backend.db.models import User
 from backend.db.session import async_get_session
 from backend.services.path_validator import validate_root_path
@@ -60,6 +61,7 @@ async def system_version():
 @router_system.get("/health", response_model=HealthResponse)
 async def system_health(
     user: User = Depends(current_active_user),
+    ctx: GroupContext = Depends(get_group_context),
     session: AsyncSession = Depends(async_get_session),
 ):
     """Return health status for the caller's group.
@@ -70,7 +72,7 @@ async def system_health(
     isn't sensitive and may help triage.
     """
     try:
-        root = await _resolve_file_system_root(session, user.group_id)
+        root = await _resolve_file_system_root(session, group_or_home(ctx))
     except FileSystemRootError as e:
         return HealthResponse(
             file_system_root=HealthCheck(ok=False, reason=str(e), path="")

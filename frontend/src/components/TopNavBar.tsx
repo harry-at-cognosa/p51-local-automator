@@ -10,6 +10,7 @@ import {
 import { LinkContainer } from "react-router-bootstrap";
 import { useAuthStore } from "../stores/useAuthStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import GroupContextSelector from "./GroupContextSelector";
 import { API_URL } from "../api/apiURL";
 
 interface VersionInfo {
@@ -162,6 +163,8 @@ export default function TopNavBar() {
               </OverlayTrigger>
             )}
           </Nav>
+
+          <GroupContextSelector />
 
           <Nav>
             <NavDropdown

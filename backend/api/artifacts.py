@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.session import async_get_session
 from backend.db.models import User, UserWorkflows, WorkflowArtifacts, WorkflowRuns, WorkflowTypes
 from backend.auth.users import current_active_user, fastapi_users, auth_backend
+from backend.api.group_context import require_concrete_group, resolve_group_context
 
 
 _FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -71,6 +72,7 @@ async def download_artifact(
     artifact_id: int,
     request: Request,
     token: str | None = Query(None),
+    group_context: str | None = Query(None),
     session: AsyncSession = Depends(async_get_session),
 ):
     # Auth: try query param token first, then standard Bearer header
@@ -98,7 +100,8 @@ async def download_artifact(
     if not run:
         raise HTTPException(status_code=404, detail="Artifact not found")
     workflow = await session.get(UserWorkflows, run.workflow_id)
-    if not workflow or workflow.group_id != user.group_id:
+    ctx = resolve_group_context(user, group_context)
+    if not workflow or workflow.group_id != require_concrete_group(ctx):
         raise HTTPException(status_code=404, detail="Artifact not found")
     if run.archived and not user.is_superuser:
         raise HTTPException(status_code=404, detail="Artifact not found")
