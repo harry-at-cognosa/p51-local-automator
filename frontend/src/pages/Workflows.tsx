@@ -219,8 +219,8 @@ export default function Workflows() {
                 onChange={(e) => setSortBy(e.target.value as "workflow_id" | "last_run_at" | "created_at")}
                 aria-label="Sort workflows"
               >
-                <option value="workflow_id">ID (newest first)</option>
                 <option value="last_run_at">Last run (newest first)</option>
+                <option value="workflow_id">ID (newest first)</option>
                 <option value="created_at">Created (newest first)</option>
               </Form.Select>
             </div>

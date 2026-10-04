@@ -53,6 +53,11 @@ export interface Filters {
 // All sort options are descending (newest first).
 export type SortBy = "workflow_id" | "last_run_at" | "created_at";
 
+// "What ran most recently" is the question this page is usually open to
+// answer, so it is the default. Rows that have never run sort to the
+// bottom (see the comparator in pages/Workflows.tsx).
+export const DEFAULT_SORT_BY: SortBy = "last_run_at";
+
 interface WorkflowsState {
   items: UserWorkflowListRow[];
   categories: WorkflowCategory[];
@@ -91,7 +96,7 @@ export const useWorkflowsStore = create<WorkflowsState>()(
       categories: [],
       types: [],
       filters: { ...DEFAULT_FILTERS },
-      sortBy: "workflow_id",
+      sortBy: DEFAULT_SORT_BY,
       page: 1,
       pageSize: 25,
       selectedIds: new Set<number>(),
@@ -155,7 +160,13 @@ export const useWorkflowsStore = create<WorkflowsState>()(
       },
     }),
     {
-      name: "wf-list-page-size",
+      // Renamed from "wf-list-page-size" (which stopped describing its
+      // contents once sortBy joined pageSize). The rename is deliberate: a
+      // stored sortBy from the old default would otherwise outlive the change
+      // of default and the page would keep sorting by ID. Costs everyone one
+      // reset of page size + sort, both one click to set again.
+      name: "wf-list-prefs",
+      version: 1,
       partialize: (state): Persisted => ({
         pageSize: state.pageSize,
         sortBy: state.sortBy,
