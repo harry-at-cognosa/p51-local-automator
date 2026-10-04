@@ -10,6 +10,7 @@
  * Trim color comes from getTrimColor() in the settings store, falling back to
  * navbar_color shade 500 if `trim_color` setting isn't configured.
  */
+import GroupContextIndicator from "../components/GroupContextIndicator";
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Container, Row, Col, Card, Table, Alert, Button } from "react-bootstrap";
@@ -84,6 +85,7 @@ export default function Dashboard() {
 
   return (
     <Container fluid className="p-4">
+      <GroupContextIndicator />
       {showHealthBanner && fsRoot && !fsRoot.ok && (
         <Alert variant="warning" className="mb-3">
           <Alert.Heading className="h6 mb-1">file_system_root is misconfigured</Alert.Heading>

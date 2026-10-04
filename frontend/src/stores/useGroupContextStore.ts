@@ -20,6 +20,10 @@ import { persist } from "zustand/middleware";
  */
 export const ALL_GROUPS = "all" as const;
 
+/** DOM id of the single selector in the top bar. The per-page indicator
+ *  focuses it rather than rendering a second control for the same state. */
+export const GROUP_CONTEXT_SELECT_ID = "group-context-select";
+
 export type GroupSelection = number | typeof ALL_GROUPS;
 
 export interface GroupOption {

@@ -4,6 +4,7 @@ import axiosClient from "../api/axiosClient";
 import { useAuthStore } from "../stores/useAuthStore";
 import {
   ALL_GROUPS,
+  GROUP_CONTEXT_SELECT_ID,
   useGroupContextStore,
   type GroupOption,
 } from "../stores/useGroupContextStore";
@@ -42,6 +43,7 @@ export default function GroupContextSelector() {
         Acting as:
       </span>
       <Form.Select
+        id={GROUP_CONTEXT_SELECT_ID}
         size="sm"
         style={{ width: "auto" }}
         value={String(selected)}

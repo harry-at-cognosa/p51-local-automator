@@ -7,6 +7,7 @@
  * Sorted by next_fire so the most imminent jobs are visually the "background"
  * a user sees before adding new ones.
  */
+import GroupContextIndicator from "../components/GroupContextIndicator";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Container, Table, Button, Modal, Form, Alert } from "react-bootstrap";
@@ -229,6 +230,7 @@ export default function Schedules() {
 
   return (
     <Container fluid className="p-4">
+      <GroupContextIndicator />
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h3 className="mb-0">Schedules</h3>
         <Button variant="primary" onClick={openPicker}>+ Schedule a job</Button>

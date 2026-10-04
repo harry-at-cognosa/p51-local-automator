@@ -6,6 +6,7 @@ import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
 import TableVCRPager from "../components/TableVCRPager";
 import EditScheduleModal from "../components/EditScheduleModal";
+import GroupContextIndicator from "../components/GroupContextIndicator";
 import { ALL_GROUPS, useGroupContextStore } from "../stores/useGroupContextStore";
 import { useWorkflowsStore } from "../stores/workflowsStore";
 import {
@@ -203,6 +204,7 @@ export default function Workflows() {
 
   return (
     <Container fluid className="p-4">
+      <GroupContextIndicator />
       <div className="d-flex justify-content-between align-items-center mb-4">
         <h3 className="mb-0">My Workflows</h3>
         <Button
