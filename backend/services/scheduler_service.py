@@ -4,29 +4,36 @@ Polls every SCHEDULER_CHECK_INTERVAL_SECONDS. For each workflow with a
 schedule and an enabled, active owner:
 
   1. Parse the schedule JSON via backend.services.schedule.
-  2. If expired (past ends_on for recurring; past at_local for one_time),
+  2. Ask evaluate_slot what to do about the most recent slot at or before
+     now: fire it, report it lost, or leave it alone because it already ran.
+  3. Fire via _run_workflow_background with trigger="scheduled"; for
+     one_time schedules set enabled=False to prevent re-fire.
+  4. If expired (past ends_on for recurring; past at_local for one_time),
      auto-disable.
-  3. If already fired today (in the schedule's local TZ), skip.
-  4. If due (within window), fire via _run_workflow_background and
-     for one_time schedules set enabled=False to prevent re-fire.
+
+A slot stays eligible for SCHEDULER_CATCHUP_SECONDS after its target, so a
+host that sleeps or a backend that restarts across a slot still runs it on
+the next poll instead of dropping the day silently. Past that bound the slot
+is logged once at warning level and the run is genuinely lost.
 
 Skip rules: disabled or deleted owner, soft-deleted workflow, missing
 or malformed schedule (logged, not raised).
 """
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
-from backend.config import SCHEDULER_CHECK_INTERVAL_SECONDS
+from backend.config import SCHEDULER_CATCHUP_SECONDS, SCHEDULER_CHECK_INTERVAL_SECONDS
 from backend.db.session import SqlAsyncSession
 from backend.db.models import User, UserWorkflows
 from backend.services.logger_service import get_logger
 from backend.services.schedule import (
+    Schedule,
     ScheduleError,
-    fired_current_slot,
-    is_due,
+    SlotDecision,
+    evaluate_slot,
     is_expired,
     parse_schedule,
 )
@@ -38,6 +45,11 @@ class WorkflowScheduler:
     def __init__(self):
         self._scheduler = AsyncIOScheduler()
         self.is_running = False
+        # (workflow_id, slot_utc) pairs already warned about. A lost slot stays
+        # lost on every later poll, so without this the warning would repeat
+        # once a minute until the next slot. In memory only: a restart re-warns
+        # once per slot, which beats needing a table for it.
+        self._warned_missed: set[tuple[int, datetime]] = set()
 
     def start(self):
         if self.is_running:
@@ -93,28 +105,66 @@ class WorkflowScheduler:
             if schedule is None:
                 continue
 
-            # Order matters: fire-window check comes first, so a one_time
-            # whose target has just barely passed (e.g., poll runs a few
-            # seconds late after a backend restart) still fires before
-            # the expiry path kicks in.
-            if fired_current_slot(schedule, wf.last_run_at, now_utc):
-                continue
+            # Order matters: the fire decision comes first, so a slot whose
+            # target has just passed (poll running late, backend restarted at
+            # the wrong moment) still fires before the expiry path kicks in.
+            decision = evaluate_slot(
+                schedule,
+                now_utc,
+                wf.last_run_at,
+                window_seconds=window_s,
+                catchup_seconds=SCHEDULER_CATCHUP_SECONDS,
+                not_before_utc=wf.created_at,
+            )
 
-            if is_due(schedule, now_utc, window_seconds=window_s):
+            if decision.fire:
                 log.info(
                     "scheduler_triggering",
                     workflow_id=wf.workflow_id,
                     name=wf.name,
                     kind=schedule.kind,
+                    slot_utc=decision.target_utc.isoformat(),
+                    late_seconds=round(decision.late_seconds),
+                    catch_up=decision.late_seconds >= window_s,
                 )
+                self._warned_missed.discard((wf.workflow_id, decision.target_utc))
                 asyncio.create_task(self._run_workflow(wf.workflow_id))
                 if schedule.kind == "one_time":
                     await self._disable_workflow(wf.workflow_id)
                 continue
 
+            if decision.missed:
+                self._warn_missed_slot(wf, schedule, decision)
+
             if is_expired(schedule, now_utc):
                 log.info("schedule_expired_auto_disable", workflow_id=wf.workflow_id)
                 await self._disable_workflow(wf.workflow_id)
+
+    def _warn_missed_slot(
+        self, wf: UserWorkflows, schedule: Schedule, decision: SlotDecision
+    ) -> None:
+        """Warn once that a scheduled run was lost outright.
+
+        Reached only past the catch-up bound, which means nothing polled for
+        hours across the slot. That is worth a line in the log: the run did
+        not happen and will not happen.
+        """
+        key = (wf.workflow_id, decision.target_utc)
+        if key in self._warned_missed:
+            return
+        self._warned_missed.add(key)
+        log.warning(
+            "scheduler_slot_missed",
+            workflow_id=wf.workflow_id,
+            name=wf.name,
+            kind=schedule.kind,
+            slot_utc=decision.target_utc.isoformat(),
+            late_seconds=round(decision.late_seconds),
+            catchup_seconds=SCHEDULER_CATCHUP_SECONDS,
+            hint="nothing polled within the catch-up window — host asleep, backend down, or event loop blocked",
+        )
+        cutoff = decision.target_utc - timedelta(days=2)
+        self._warned_missed = {k for k in self._warned_missed if k[1] >= cutoff}
 
     async def _disable_workflow(self, workflow_id: int):
         """Flip enabled=False. Used for expired schedules and after a one-time fire."""
@@ -125,9 +175,14 @@ class WorkflowScheduler:
                 await session.commit()
 
     async def _run_workflow(self, workflow_id: int):
-        """Fire the workflow via the same path as a manual Run Now."""
+        """Fire the workflow via the same path as a manual Run Now.
+
+        Same path, different label: the run is recorded with trigger
+        "scheduled" so the run history distinguishes a schedule firing from
+        somebody pressing Run Now.
+        """
         from backend.api.workflows import _run_workflow_background
-        await _run_workflow_background(workflow_id)
+        await _run_workflow_background(workflow_id, trigger="scheduled")
 
 
 scheduler = WorkflowScheduler()

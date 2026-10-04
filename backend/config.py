@@ -17,6 +17,10 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 CORS_ORIGINS = [s.strip() for s in os.getenv("CORS_ORIGINS", "").split(",") if s.strip()]
 
 SCHEDULER_CHECK_INTERVAL_SECONDS = int(os.getenv("SCHEDULER_CHECK_INTERVAL_SECONDS", "60"))
+# How long after its target time a missed slot may still fire. The poll
+# window alone cannot survive the host sleeping or the backend restarting
+# across a slot; past this bound the run is reported lost instead.
+SCHEDULER_CATCHUP_SECONDS = int(os.getenv("SCHEDULER_CATCHUP_SECONDS", str(6 * 3600)))
 AUTO_START_SCHEDULER = os.getenv("AUTO_START_SCHEDULER", "true").lower() in {"1", "true", "yes"}
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

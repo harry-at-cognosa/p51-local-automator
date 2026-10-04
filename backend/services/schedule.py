@@ -175,38 +175,93 @@ def parse_schedule(d: dict | None) -> Schedule | None:
     raise ScheduleError(f"unknown schedule kind: {kind!r}")
 
 
-def is_due(s: Schedule, now_utc: datetime, window_seconds: int = 90) -> bool:
-    """Return True if the schedule should fire within `window_seconds`
-    after its target time relative to `now_utc`.
+@dataclass
+class SlotDecision:
+    """What the polling loop should do about one schedule, right now.
 
-    The window is forward-only: a fire is "due" iff now ∈ [target, target+window).
-    This matches the polling model — we want to fire once per poll, not retroactively.
-
-    Exception: for one_time schedules, the window is widened to the same
-    grace period that governs is_expired (default 5 min). This lets a fire
-    catch up if the backend was briefly down or restarted at exactly the
-    wrong moment. Without the widening, a one_time could sit in a dead zone
-    between (target + 90s) and (target + 5 min) where it neither fires nor
-    auto-disables — visible as enabled=True, next_fires_utc=[].
+    `target_utc` is the schedule's most recent slot at or before now (None
+    when it has no slot in the lookback span). `fire` and `missed` are never
+    both True; both are False when there is nothing to do — the slot already
+    ran, or it predates the workflow, or there is no slot at all.
     """
-    now_local = now_utc.astimezone(s.tz)
+    target_utc: datetime | None
+    fire: bool = False
+    missed: bool = False
+    late_seconds: float = 0.0
 
+
+def evaluate_slot(
+    s: Schedule,
+    now_utc: datetime,
+    last_run_at_utc: datetime | None,
+    window_seconds: int = 90,
+    catchup_seconds: int = 0,
+    not_before_utc: datetime | None = None,
+) -> SlotDecision:
+    """Decide whether `s` has a slot that should fire at `now_utc`.
+
+    This replaces the earlier is_due/fired_current_slot pair, which judged
+    only *today's* target inside a forward-only window. Two defects fell out
+    of that:
+
+    - A slot was lost permanently if nothing polled during its window — host
+      asleep, backend restarting, event loop blocked. By the next poll the
+      target had passed, so nothing fired and nothing was logged.
+      `catchup_seconds` keeps a slot eligible for that long after its target.
+    - A slot shortly before local midnight could never be caught up at all,
+      because once past midnight "today's target" is tomorrow's. Walking back
+      over whole slots from `now_local` fixes that.
+
+    `catchup_seconds` bounds how late a fire may be. Beyond it the slot comes
+    back `missed` so the caller can warn: that run is genuinely lost, and a
+    silently lost scheduled run is the failure worth shouting about.
+
+    `not_before_utc` (the workflow's created_at) suppresses catch-up for
+    slots predating the workflow, so saving an 07:10 daily schedule at 09:00
+    does not immediately fire 07:10's "missed" run.
+    """
+    horizon = max(window_seconds, catchup_seconds)
     if s.kind == "one_time":
-        delta = (now_local - s.at_local).total_seconds()
-        return 0 <= delta < _ONE_TIME_EXPIRY_GRACE_SECONDS
+        # Preserve the pre-existing 5-minute floor, which keeps a one_time out
+        # of a dead zone between the fire window and is_expired's grace.
+        horizon = max(horizon, _ONE_TIME_EXPIRY_GRACE_SECONDS)
 
-    today_local = now_local.date()
-    if today_local < s.starts_on or today_local > s.ends_on:
-        return False
-    if today_local.weekday() not in s.days_of_week:
-        return False
-    weeks_since = (today_local - s.starts_on).days // 7
-    if weeks_since % s.week_interval != 0:
-        return False
+    target_utc = latest_slot(s, now_utc, horizon_seconds=horizon)
+    if target_utc is None:
+        return SlotDecision(target_utc=None)
 
-    target = datetime.combine(today_local, time(s.hour, s.minute), tzinfo=s.tz)
-    delta = (now_local - target).total_seconds()
-    return 0 <= delta < window_seconds
+    already_run = last_run_at_utc is not None and last_run_at_utc >= target_utc
+    predates_workflow = not_before_utc is not None and target_utc < not_before_utc
+    if already_run or predates_workflow:
+        return SlotDecision(target_utc=target_utc)
+
+    late = (now_utc - target_utc).total_seconds()
+    if late < horizon:
+        return SlotDecision(target_utc=target_utc, fire=True, late_seconds=late)
+    return SlotDecision(target_utc=target_utc, missed=True, late_seconds=late)
+
+
+def latest_slot(s: Schedule, now_utc: datetime, horizon_seconds: int) -> datetime | None:
+    """The schedule's most recent fire time at or before `now_utc`, in UTC.
+
+    Looks back only as far as `horizon_seconds` plus a day of slack — the
+    slack means a slot sitting just outside the horizon is still returned, so
+    the caller can report it missed rather than have it vanish. Returns None
+    when the schedule has no slot in that span.
+    """
+    if s.kind == "one_time":
+        target_utc = s.at_local.astimezone(_UTC)
+        return target_utc if target_utc <= now_utc else None
+
+    now_local = now_utc.astimezone(s.tz)
+    d = now_local.date()
+    for _ in range(int(horizon_seconds // 86400) + 2):
+        if _is_slot_day(s, d):
+            target_local = datetime.combine(d, time(s.hour, s.minute), tzinfo=s.tz)
+            if target_local <= now_local:
+                return target_local.astimezone(_UTC)
+        d -= timedelta(days=1)
+    return None
 
 
 _ONE_TIME_EXPIRY_GRACE_SECONDS = 300
@@ -219,45 +274,16 @@ def is_expired(s: Schedule, now_utc: datetime) -> bool:
       window (5 min) keeps a brief backend restart that straddles the
       target time from immediately disabling the job before the fire
       window has had a chance to trigger. The polling-loop ordering
-      (is_due before is_expired) handles the in-window case; the grace
-      is a belt-and-suspenders for slow polls or longer restarts.
+      (evaluate_slot before is_expired) handles the in-window case; the
+      grace is a belt-and-suspenders for slow polls or longer restarts.
+      A one_time caught up beyond this grace fires from evaluate_slot,
+      whose horizon is never below it.
     For recurring: True if today (in local TZ) is past `ends_on`.
     """
     now_local = now_utc.astimezone(s.tz)
     if s.kind == "one_time":
         return (now_local - s.at_local).total_seconds() > _ONE_TIME_EXPIRY_GRACE_SECONDS
     return now_local.date() > s.ends_on
-
-
-def fired_current_slot(s: Schedule, last_run_at_utc: datetime | None, now_utc: datetime) -> bool:
-    """Has the schedule already fired its *current target slot*?
-
-    Compares last_run_at against the schedule's most recent expected fire
-    time, not the bare date. This is the correct dedup semantic:
-
-    - Recurring 8 AM, last run at 8:00:30 today → True (don't re-fire).
-    - Recurring 8 AM, last run at 2 PM today (manual) → False — the 8 AM
-      slot today already passed without us firing it; tomorrow at 8 AM the
-      target moves forward and the manual run is before it, so we fire.
-    - One-time at 8:05 PM, manual run at 2:08 PM today → False — the 2 PM
-      run was not this schedule's target slot; 8:05 PM still fires.
-    - One-time at 8:05 PM, last fire at 8:05 PM → True (don't re-fire; the
-      one-time path also sets enabled=False as a belt-and-suspenders).
-
-    Comparison is in UTC so DST doesn't introduce off-by-one-hour bugs.
-    """
-    if last_run_at_utc is None:
-        return False
-
-    if s.kind == "one_time":
-        target_utc = s.at_local.astimezone(_UTC)
-        return last_run_at_utc >= target_utc
-
-    # Recurring: today's target time in the schedule's local TZ, normalized to UTC.
-    today_local = now_utc.astimezone(s.tz).date()
-    target_local = datetime.combine(today_local, time(s.hour, s.minute), tzinfo=s.tz)
-    target_utc = target_local.astimezone(_UTC)
-    return last_run_at_utc >= target_utc
 
 
 def next_fires(s: Schedule, after_utc: datetime, count: int = 5) -> list[datetime]:
@@ -274,12 +300,10 @@ def next_fires(s: Schedule, after_utc: datetime, count: int = 5) -> list[datetim
     d = max(s.starts_on, after_local.date())
     fires: list[datetime] = []
     while len(fires) < count and d <= s.ends_on:
-        if d.weekday() in s.days_of_week:
-            weeks_since = (d - s.starts_on).days // 7
-            if weeks_since % s.week_interval == 0:
-                fire_local = datetime.combine(d, time(s.hour, s.minute), tzinfo=s.tz)
-                if fire_local > after_local:
-                    fires.append(fire_local.astimezone(_UTC))
+        if _is_slot_day(s, d):
+            fire_local = datetime.combine(d, time(s.hour, s.minute), tzinfo=s.tz)
+            if fire_local > after_local:
+                fires.append(fire_local.astimezone(_UTC))
         d += timedelta(days=1)
     return fires
 
@@ -309,6 +333,20 @@ def human_summary(s: Schedule) -> str:
 
 
 # ── internal helpers ────────────────────────────────────────
+
+
+def _is_slot_day(s: Schedule, d: date) -> bool:
+    """Does the recurring schedule have a slot on local date `d`?
+
+    Single source of truth for day eligibility, shared by latest_slot and
+    next_fires so "when does this fire" cannot drift between the firing path
+    and the preview the user is shown.
+    """
+    if d < s.starts_on or d > s.ends_on:
+        return False
+    if d.weekday() not in s.days_of_week:
+        return False
+    return ((d - s.starts_on).days // 7) % s.week_interval == 0
 
 
 def _validate_hour_minute(hour: int, minute: int) -> None:

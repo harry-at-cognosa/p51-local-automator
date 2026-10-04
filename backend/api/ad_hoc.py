@@ -343,7 +343,7 @@ async def run_email_topic_monitor(
     # per-workflow run lock (F5) applies to ad-hoc rows too — saves us
     # from rebuilding that lock here.
     from backend.api.workflows import _run_workflow_background
-    background_tasks.add_task(_run_workflow_background, workflow.workflow_id)
+    background_tasks.add_task(_run_workflow_background, workflow.workflow_id, "adhoc")
 
     return _serialize_read(workflow)
 

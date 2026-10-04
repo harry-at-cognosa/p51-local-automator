@@ -809,8 +809,14 @@ WORKFLOW_RUNNERS = {
 }
 
 
-async def _run_workflow_background(workflow_id: int):
-    """Run a workflow in the background with its own DB session."""
+async def _run_workflow_background(workflow_id: int, trigger: str = "manual"):
+    """Run a workflow in the background with its own DB session.
+
+    `trigger` is recorded on the run row so the history says *why* the run
+    happened. Every entry point funnels through here, so it is the only place
+    the label can be set: "manual" for Run Now, "scheduled" for the poller,
+    "adhoc" for the ad-hoc pages.
+    """
     async with SqlAsyncSession() as session:
         # Eager-load workflow_type + user + group so the artifact_meta
         # builder (and any other code that wants human-readable labels
@@ -854,7 +860,7 @@ async def _run_workflow_background(workflow_id: int):
             )
             return
 
-        await runner(session, workflow, trigger="manual")
+        await runner(session, workflow, trigger=trigger)
 
         # Optional "email me my results" final step. Best-effort: never
         # fails the run, always writes to workflow_run_email_log.
@@ -900,7 +906,7 @@ async def trigger_run(
         )
 
     # Run in background so the API returns immediately
-    background_tasks.add_task(_run_workflow_background, workflow_id)
+    background_tasks.add_task(_run_workflow_background, workflow_id, "manual")
 
     return {"detail": f"Workflow run triggered for '{workflow.name}'", "workflow_id": workflow_id}
 
