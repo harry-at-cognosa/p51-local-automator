@@ -6,6 +6,7 @@ import WorkflowConfigForm from "../components/WorkflowConfigForm";
 import StatusBadge from "../components/StatusBadge";
 import TableVCRPager from "../components/TableVCRPager";
 import EditScheduleModal from "../components/EditScheduleModal";
+import { useAuthStore } from "../stores/useAuthStore";
 import GroupContextIndicator from "../components/GroupContextIndicator";
 import { ALL_GROUPS, useGroupContextStore } from "../stores/useGroupContextStore";
 import { useWorkflowsStore } from "../stores/workflowsStore";
@@ -46,6 +47,7 @@ export default function Workflows() {
     types,
     filters,
     sortBy,
+    includeAdhoc,
     page,
     pageSize,
     selectedIds,
@@ -54,6 +56,7 @@ export default function Workflows() {
     fetchAll,
     setFilter,
     setSortBy,
+    setIncludeAdhoc,
     setPage,
     setPageSize,
     toggleSelected,
@@ -119,6 +122,7 @@ export default function Workflows() {
   // listed, but nothing can be opened or acted on, because no single group
   // owns the action. The server enforces this (409); the UI simply doesn't
   // offer the affordances, so that 409 should never be reachable by hand.
+  const isSuperuser = useAuthStore((s) => s.is_superuser);
   const groupSelection = useGroupContextStore((s) => s.selected);
   const groupName = useGroupContextStore((s) => s.groupName);
   const viewingAllGroups = groupSelection === ALL_GROUPS;
@@ -244,6 +248,16 @@ export default function Workflows() {
                 <option value="created_at">Created (newest first)</option>
               </Form.Select>
             </div>
+            {isSuperuser && (
+              <Form.Check
+                type="switch"
+                id="include-adhoc"
+                label="Include ad-hoc"
+                title="Ad-hoc rows are the scratch workflows behind the Ad-hoc menu — one per user, per group, per type. Shown for triage; their IDs are otherwise invisible in the UI."
+                checked={includeAdhoc}
+                onChange={(e) => setIncludeAdhoc(e.target.checked)}
+              />
+            )}
             <Form.Check
               type="switch"
               id="scheduled-only"
@@ -385,7 +399,22 @@ export default function Workflows() {
                         />
                       </td>
                     )}
-                    <td className="text-muted small font-monospace">#{w.workflow_id}</td>
+                    <td className="text-muted small font-monospace">
+                      #{w.workflow_id}
+                      {w.is_adhoc && (
+                        <span
+                          className="badge ms-1"
+                          style={{
+                            fontSize: "0.65em",
+                            backgroundColor: "var(--theme-color-200)",
+                            color: "var(--theme-color-900)",
+                          }}
+                          title="Ad-hoc scratch workflow, managed from the Ad-hoc menu"
+                        >
+                          ad-hoc
+                        </span>
+                      )}
+                    </td>
                     <td title={w.type.category.long_name}>{w.type.category.short_name}</td>
                     <td title={`${w.type.long_name}${w.type.type_desc ? " — " + w.type.type_desc : ""}`}>
                       {w.type.short_name}

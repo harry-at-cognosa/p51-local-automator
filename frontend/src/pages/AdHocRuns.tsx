@@ -90,6 +90,7 @@ export default function AdHocRuns() {
                   <th>Run</th>
                   <th>Type</th>
                   <th>Workflow</th>
+                  <th>Workflow ID</th>
                   <th>Status</th>
                   <th>Steps</th>
                   <th>Trigger</th>
@@ -112,6 +113,10 @@ export default function AdHocRuns() {
                       <td>#{r.run_id}</td>
                       <td>{r.type_long_name}</td>
                       <td>{r.workflow_name}</td>
+                      {/* The ad-hoc row's own id. There is one per user, per
+                          group, per type, and it is otherwise invisible in the
+                          UI — handy when reconciling against the database. */}
+                      <td className="text-muted small font-monospace">#{r.workflow_id}</td>
                       <td>
                         <StatusBadge status={r.status} />
                         <EmailSendBadge

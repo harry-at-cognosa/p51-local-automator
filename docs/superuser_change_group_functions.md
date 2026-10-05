@@ -119,6 +119,16 @@ group-1 row.
 Current rows: **wf 143** (group 1, created 2026-05-23) and **wf 150** (group 2,
 created 2026-10-04 during verification).
 
+To see them, turn on **Include ad-hoc** on the Workflows page — a
+superuser-only switch beside "Show scheduled only", which sends
+`?include_adhoc=true`. Ad-hoc rows then appear in the normal list with an
+"ad-hoc" badge next to the id. The switch is deliberately *not* persisted:
+it is a triage mode, and one that silently stayed on would quietly change
+what the list means. The Ad-hoc Runs page also shows the workflow id now.
+
+Before 2026-10-04 there was no way to see an ad-hoc workflow's id in the UI
+at all — the backend supported `include_adhoc` but nothing ever sent it.
+
 `group_id` is part of the *lookup key*, not merely the stamp, and that is the
 whole point. Before this, acting as group 2 would have found your group-1
 ad-hoc row and run it — and since runners derive output paths from

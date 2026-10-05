@@ -40,6 +40,7 @@ export interface UserWorkflowListRow {
   latest_run_status: string | null;
   latest_run_at: string | null;
   latest_run_artifact_count: number | null;
+  is_adhoc: boolean;
 }
 
 export interface Filters {
@@ -64,6 +65,7 @@ interface WorkflowsState {
   types: WorkflowType[];
   filters: Filters;
   sortBy: SortBy;
+  includeAdhoc: boolean;
   page: number;
   pageSize: number;
   selectedIds: Set<number>;
@@ -71,6 +73,7 @@ interface WorkflowsState {
   error: string | null;
 
   fetchAll: () => Promise<void>;
+  setIncludeAdhoc: (v: boolean) => Promise<void>;
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
   resetFilters: () => void;
   setSortBy: (s: SortBy) => void;
@@ -97,6 +100,11 @@ export const useWorkflowsStore = create<WorkflowsState>()(
       types: [],
       filters: { ...DEFAULT_FILTERS },
       sortBy: DEFAULT_SORT_BY,
+      // Ad-hoc rows are scratch state behind the Ad-hoc menu, not workflows
+      // anyone manages, so they stay out of the list unless a superuser asks
+      // for them. Deliberately not persisted: it is a triage mode, and one
+      // that silently stayed on would quietly change what the list means.
+      includeAdhoc: false,
       page: 1,
       pageSize: 25,
       selectedIds: new Set<number>(),
@@ -107,7 +115,9 @@ export const useWorkflowsStore = create<WorkflowsState>()(
         set({ loading: true, error: null });
         try {
           const [itemsRes, categoriesRes, typesRes] = await Promise.all([
-            axiosClient.get("/workflows"),
+            axiosClient.get("/workflows", {
+              params: get().includeAdhoc ? { include_adhoc: true } : undefined,
+            }),
             axiosClient.get("/workflow-categories"),
             axiosClient.get("/workflow-types"),
           ]);
@@ -129,6 +139,10 @@ export const useWorkflowsStore = create<WorkflowsState>()(
       resetFilters: () => set({ filters: { ...DEFAULT_FILTERS }, page: 1 }),
 
       setSortBy: (s) => set({ sortBy: s, page: 1 }),
+      setIncludeAdhoc: async (v) => {
+        set({ includeAdhoc: v, page: 1, selectedIds: new Set<number>() });
+        await get().fetchAll();
+      },
 
       setPage: (n) => set({ page: Math.max(1, n) }),
 
