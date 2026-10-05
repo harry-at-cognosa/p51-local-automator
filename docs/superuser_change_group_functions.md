@@ -197,10 +197,31 @@ Hermetic unit tests: `backend/tests/test_group_context.py` (34 tests). Covers
 context resolution, per-role scoping, the no-cross-group-write guarantee, the
 read-only fallback, and immutability of the context object.
 
-Non-superuser confinement is covered **only** by unit tests — parametrized
-across 3 roles × 5 header values, including a non-superuser explicitly
-requesting another group. It was not verified against a live login because
-that needs a second account's password. Worth one manual pass.
+### Verified manually, 2026-10-04
+
+As superuser `admin@localhost`:
+
+- **All groups** — selector present in the top bar; indicator banner renders on
+  Workflows, Dashboard and Schedules stating nothing can be opened, run or
+  changed; Group column present; rows not clickable; Create disabled.
+- **Acting as a group** — indicator names the group and states you see and
+  change what a member of it does; Group column gone; rows clickable.
+
+As `cogmgr` (groupadmin, group 2, not a superuser): neither the selector nor
+the indicator renders anywhere.
+
+### Non-superuser confinement
+
+Two halves, verified separately:
+
+- **The UI half** — confirmed manually above: no selector and no indicator
+  render for `cogmgr`.
+- **The server half** — covered by unit tests, parametrized across 3 roles ×
+  5 header values including a non-superuser explicitly requesting another
+  group. This is the half that matters: the absence of a control proves only
+  that the UI does not offer one, whereas the server ignores
+  `X-Group-Context` outright for non-superusers, so a hand-crafted request
+  cannot escape the caller's own group either.
 
 Measured end-to-end as superuser `admin@localhost` (home group 1):
 
