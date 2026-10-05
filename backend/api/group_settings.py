@@ -2,8 +2,18 @@
 
 Scoping:
   - Groupadmins see and edit only their own group's settings.
-  - Superusers may target any group via ?group_id=N. Without the param,
-    they default to their own group, same as a groupadmin.
+  - Superusers administer whichever group they are acting as, chosen from
+    the group selector in the top bar — the same context every other page
+    obeys. In all-groups mode there is no single group to administer, so
+    these endpoints refuse with 409.
+  - An explicit ?group_id=N still overrides, for callers predating the
+    context. It is still refused for a non-superuser reaching outside
+    their own group.
+
+This page used to carry its own group picker, independent of the acting
+group, which meant a superuser could be looking at group 2's workflows
+while editing group 1's settings. See
+docs/superuser_change_group_functions.md.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -13,6 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.session import async_get_session
 from backend.db.models import User, GroupSettings
 from backend.auth.users import current_active_user
+from backend.api.group_context import (
+    GroupContext,
+    get_group_context,
+    require_concrete_group,
+)
 
 router_group_settings = APIRouter(prefix="/group-settings")
 
@@ -34,12 +49,19 @@ def _require_groupadmin(user: User):
         raise HTTPException(status_code=403, detail="Group admin required")
 
 
-def _resolve_group_id(user: User, requested: int | None) -> int:
+def _resolve_group_id(ctx: GroupContext, requested: int | None) -> int:
     """Return the group_id to operate on, or 403 if a non-superuser
-    tries to address a group other than their own."""
-    if requested is None or requested == user.group_id:
-        return user.group_id
-    if not user.is_superuser:
+    tries to address a group other than their own.
+
+    With no explicit request this is the acting group, so this page agrees
+    with the rest of the app about which group is being administered. For a
+    non-superuser the acting group is always their own, so the 403 below is
+    reachable only via an explicit param."""
+    if requested is None:
+        return require_concrete_group(ctx)
+    if requested == ctx.user.group_id:
+        return requested
+    if not ctx.user.is_superuser:
         raise HTTPException(status_code=403, detail="Cannot access other groups' settings")
     return requested
 
@@ -49,9 +71,10 @@ async def list_group_settings(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
     group_id: int | None = Query(None),
+    ctx: GroupContext = Depends(get_group_context),
 ):
     _require_groupadmin(user)
-    target = _resolve_group_id(user, group_id)
+    target = _resolve_group_id(ctx, group_id)
     result = await session.execute(
         select(GroupSettings)
         .where(GroupSettings.group_id == target)
@@ -67,9 +90,10 @@ async def upsert_group_setting(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
     group_id: int | None = Query(None),
+    ctx: GroupContext = Depends(get_group_context),
 ):
     _require_groupadmin(user)
-    target = _resolve_group_id(user, group_id)
+    target = _resolve_group_id(ctx, group_id)
     result = await session.execute(
         select(GroupSettings).where(
             GroupSettings.group_id == target,
@@ -91,9 +115,10 @@ async def delete_group_setting(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(async_get_session),
     group_id: int | None = Query(None),
+    ctx: GroupContext = Depends(get_group_context),
 ):
     _require_groupadmin(user)
-    target = _resolve_group_id(user, group_id)
+    target = _resolve_group_id(ctx, group_id)
     result = await session.execute(
         select(GroupSettings).where(
             GroupSettings.group_id == target,

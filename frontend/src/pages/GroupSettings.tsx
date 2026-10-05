@@ -1,3 +1,5 @@
+import GroupContextIndicator from "../components/GroupContextIndicator";
+import { ALL_GROUPS, useGroupContextStore } from "../stores/useGroupContextStore";
 import { useEffect, useState, type FormEvent } from "react";
 import { Container, Table, Button, Modal, Form, Row, Col } from "react-bootstrap";
 import axiosClient from "../api/axiosClient";
@@ -6,12 +8,6 @@ import { useAuthStore } from "../stores/useAuthStore";
 interface GroupSetting {
   name: string;
   value: string;
-}
-
-interface GroupSummary {
-  group_id: number;
-  group_name: string;
-  is_active: boolean;
 }
 
 interface PathValidateResponse {
@@ -33,30 +29,30 @@ export default function GroupSettings() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [pathTest, setPathTest] = useState<PathValidateResponse | null>(null);
   const [pathTesting, setPathTesting] = useState(false);
-  const { group_id, group_name, is_superuser } = useAuthStore();
+  const { group_name, is_superuser } = useAuthStore();
 
-  // For superusers: list of all groups + currently-selected target.
-  // For non-superusers: locked to their own group.
-  const [groups, setGroups] = useState<GroupSummary[]>([]);
-  const [targetGroupId, setTargetGroupId] = useState<number>(group_id ?? 0);
-  const targetGroupName = is_superuser
-    ? groups.find((g) => g.group_id === targetGroupId)?.group_name ?? group_name
-    : group_name;
+  // Which group is administered follows the acting group from the top-bar
+  // selector, like every other page. This page used to carry its own
+  // independent picker, which let a superuser look at one group's workflows
+  // while editing another group's settings.
+  const groupSelection = useGroupContextStore((s) => s.selected);
+  const groupContextName = useGroupContextStore((s) => s.groupName);
+  const targetGroupName =
+    !is_superuser || groupSelection === ALL_GROUPS
+      ? group_name
+      : groupContextName(groupSelection as number);
 
-  const isOtherGroup = is_superuser && targetGroupId !== group_id;
-  const groupQuery = isOtherGroup ? `?group_id=${targetGroupId}` : "";
+  const viewingAllGroups = is_superuser && groupSelection === ALL_GROUPS;
 
   const fetchSettings = () => {
-    axiosClient.get(`/group-settings${groupQuery}`).then((res) => setSettings(res.data));
+    axiosClient
+      .get(`/group-settings`)
+      .then((res) => setSettings(res.data))
+      // 409 in all-groups mode — nothing to show until a group is picked.
+      .catch(() => setSettings([]));
   };
 
-  useEffect(() => {
-    if (is_superuser) {
-      axiosClient.get("/manage/groups").then((res) => setGroups(res.data));
-    }
-  }, [is_superuser]);
-
-  useEffect(() => { fetchSettings(); }, [targetGroupId]);
+  useEffect(() => { fetchSettings(); }, []);
 
   const startEdit = (s: GroupSetting) => {
     setEditingName(s.name);
@@ -84,7 +80,7 @@ export default function GroupSettings() {
 
   const saveEdit = async () => {
     if (!editingName) return;
-    await axiosClient.put(`/group-settings/${editingName}${groupQuery}`, { value: editValue });
+    await axiosClient.put(`/group-settings/${editingName}`, { value: editValue });
     setEditingName(null);
     setPathTest(null);
     fetchSettings();
@@ -92,7 +88,7 @@ export default function GroupSettings() {
 
   const handleAdd = async (e: FormEvent) => {
     e.preventDefault();
-    await axiosClient.put(`/group-settings/${newName}${groupQuery}`, { value: newValue });
+    await axiosClient.put(`/group-settings/${newName}`, { value: newValue });
     setShowAdd(false);
     setNewName("");
     setNewValue("");
@@ -101,7 +97,7 @@ export default function GroupSettings() {
 
   const handleDelete = async (name: string) => {
     if (!confirm(`Delete group setting "${name}"?`)) return;
-    await axiosClient.delete(`/group-settings/${name}${groupQuery}`);
+    await axiosClient.delete(`/group-settings/${name}`);
     fetchSettings();
   };
 
@@ -140,33 +136,27 @@ export default function GroupSettings() {
 
   return (
     <Container fluid className="p-4">
+      <GroupContextIndicator />
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h3 className="mb-0">Group Settings</h3>
           <small className="text-muted">
             Settings for: <strong>{targetGroupName}</strong>
-            {isOtherGroup && (
-              <span className="text-warning ms-2">(superuser — editing another group)</span>
-            )}
           </small>
         </div>
         <div className="d-flex gap-2 align-items-center">
-          {is_superuser && groups.length > 0 && (
-            <Form.Select
-              value={targetGroupId}
-              onChange={(e) => setTargetGroupId(Number(e.target.value))}
-              style={{ width: "auto" }}
-              size="sm"
-            >
-              {groups.map((g) => (
-                <option key={g.group_id} value={g.group_id}>
-                  #{g.group_id} {g.group_name}
-                  {g.group_id === group_id ? " (your group)" : ""}
-                </option>
-              ))}
-            </Form.Select>
-          )}
-          <Button variant="primary" onClick={() => setShowAdd(true)}>+ Add Setting</Button>
+          <Button
+            variant="primary"
+            disabled={viewingAllGroups}
+            title={
+              viewingAllGroups
+                ? "Select a group first — a setting has to belong to one."
+                : undefined
+            }
+            onClick={() => setShowAdd(true)}
+          >
+            + Add Setting
+          </Button>
         </div>
       </div>
 

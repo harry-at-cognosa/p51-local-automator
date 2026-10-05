@@ -126,15 +126,23 @@ ad-hoc row and run it — and since runners derive output paths from
 filesystem root. A cross-group write by the back door, with every explicit
 permission check still passing.
 
-**5. Group Settings does not follow the selector.** `/app/admin/group-settings`
-predates this feature and has its own mechanism — `_resolve_group_id()` in
-`backend/api/group_settings.py`, driven by an explicit `?group_id=` query
-param. It ignores `X-Group-Context` entirely. Measured: acting as group 2 and
-requesting `/group-settings` returns your *home* group's settings; only
-`?group_id=2` reaches group 2's. **Two mechanisms for one concept.** Harmless
-today because the page passes its own group explicitly, confusing the first
-time you hit it. Candidate cleanup: have `_resolve_group_id` default to the
-acting group when no param is given.
+**5. Group Settings follows the selector too** *(since 2026-10-04)*. It used
+to be the exception: `_resolve_group_id()` in `backend/api/group_settings.py`
+ignored the context, and the page carried its *own* group picker. A superuser
+could therefore be looking at group 2's workflows while editing group 1's
+settings — two pickers for one concept, disagreeing silently.
+
+`_resolve_group_id` now defaults to the acting group, and the page's rival
+picker is gone. Measured: acting as group 1 → group 1's settings; acting as
+group 2 → group 2's; all-groups → 409, nothing to administer. An explicit
+`?group_id=N` still overrides and is still refused for a non-superuser
+reaching outside their own group, since it predates the context and may have
+other callers.
+
+**Consequence worth knowing:** editing another group's settings now means
+*switching into that group*, which also changes what you see on Workflows,
+Dashboard and Schedules. You can no longer administer group 2's settings
+while standing in group 1.
 
 **6. The health banner uses your home group in all-groups mode.** A deliberate
 exception (`group_or_home()`): the Dashboard loads
